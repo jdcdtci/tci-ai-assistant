@@ -20,7 +20,12 @@
       "Bash(pkill -f \"node /Users/dielmannmacbook/tci-ai-assistant/node_modules/.bin/next dev\" 2>/dev/null *)",
       "Bash(echo \"exit: $?\")",
       "Bash(git -C /Users/dielmannmacbook/tci-ai-assistant status)",
-      "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d '{\"message\":\"What is the capital of France?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')"
+      "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d '{\"message\":\"What is the capital of France?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
+      "Bash(git remote *)",
+      "Bash(git push *)",
+      "Bash(curl -s -X POST https://tci-ai-assistant.vercel.app/api/chat -H 'Content-Type: application/json' -d '{\"message\":\"What is the capital of France?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
+      "Bash(npx vercel *)",
+      "Bash(npm install *)"
     ]
   }
 }
