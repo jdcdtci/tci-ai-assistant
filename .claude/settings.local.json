@@ -2,7 +2,17 @@
   "permissions": {
     "allow": [
       "Bash(npm -v)",
-      "Bash(npx --yes create-next-app@latest . --typescript --app --eslint --no-tailwind --no-src-dir --import-alias \"@/*\" --use-npm --no-turbopack)"
+      "Bash(npx --yes create-next-app@latest . --typescript --app --eslint --no-tailwind --no-src-dir --import-alias \"@/*\" --use-npm --no-turbopack)",
+      "Bash(npm run *)",
+      "Bash(echo \"started with pid $!\")",
+      "Bash(cat /tmp/nextdev.log; echo \"---ps---\"; ps aux | grep \"next dev\" | grep -v grep)",
+      "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d '{\"message\":\"hello world\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
+      "Bash(kill %1)",
+      "Bash(pkill -f \"node /Users/dielmannmacbook/tci-ai-assistant/node_modules/.bin/next dev\")",
+      "Bash(curl -s -X POST http://localhost:3000/api/chat -H \"Content-Type: application/json\" -d '{\"message\":\"second check\"}' -w \"\\\\nHTTP status: %{http_code}\\\\n\")",
+      "Read(//tmp/**)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
