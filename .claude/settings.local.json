@@ -12,7 +12,15 @@
       "Bash(curl -s -X POST http://localhost:3000/api/chat -H \"Content-Type: application/json\" -d '{\"message\":\"second check\"}' -w \"\\\\nHTTP status: %{http_code}\\\\n\")",
       "Read(//tmp/**)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(echo \"started pid $!\")",
+      "Bash(curl -sv http://localhost:3000 -o /dev/null)",
+      "Bash(curl -sv http://127.0.0.1:3000 -o /dev/null)",
+      "Bash(curl -X POST http://localhost:3000/api/chat -H \"Content-Type: application/json\" -d '{\"message\":\"hello\"}')",
+      "Bash(pkill -f \"node /Users/dielmannmacbook/tci-ai-assistant/node_modules/.bin/next dev\" 2>/dev/null *)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(git -C /Users/dielmannmacbook/tci-ai-assistant status)",
+      "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d '{\"message\":\"What is the capital of France?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')"
     ]
   }
 }
