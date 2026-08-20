@@ -45,7 +45,13 @@
       "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"cbd8d7e2-b787-446e-9bce-aac386dfaaae\",\"message\":\"What are the five stages of the marketing research process?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
       "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"cbd8d7e2-b787-446e-9bce-aac386dfaaae\",\"message\":\"What programming language does the course use for statistical analysis, R or Python?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
       "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d '{\"message\":\"hello\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
-      "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"00000000-0000-0000-0000-000000000000\",\"message\":\"What is this course about?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')"
+      "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"00000000-0000-0000-0000-000000000000\",\"message\":\"What is this course about?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
+      "Bash(curl -s -X POST https://tci-ai-assistant.vercel.app/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"cbd8d7e2-b787-446e-9bce-aac386dfaaae\",\"message\":\"What are the five stages of the marketing research process?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
+      "Bash(curl -s -X POST https://tci-ai-assistant.vercel.app/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"cbd8d7e2-b787-446e-9bce-aac386dfaaae\",\"message\":\"What programming language does the course use for statistical analysis, R or Python?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
+      "Bash(curl -s -X POST https://tci-ai-assistant.vercel.app/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"cbd8d7e2-b787-446e-9bce-aac386dfaaae\",\"message\":\"can you go deeper on problem definition specifically, with an example\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
+      "Bash(npx tsx *)",
+      "Bash(echo \"typecheck exit: $?\")",
+      "Bash(git checkout *)"
     ]
   }
 }
