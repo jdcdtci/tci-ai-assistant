@@ -27,7 +27,25 @@
       "Bash(npx vercel *)",
       "Bash(npm install *)",
       "Bash(open -e /Users/dielmannmacbook/tci-ai-assistant/.env.local)",
-      "Bash(git check-ignore *)"
+      "Bash(git check-ignore *)",
+      "mcp__f9588179-5cbf-4def-a5ad-d5362f19cd99__list_projects",
+      "mcp__f9588179-5cbf-4def-a5ad-d5362f19cd99__list_tables",
+      "mcp__f9588179-5cbf-4def-a5ad-d5362f19cd99__apply_migration",
+      "mcp__f9588179-5cbf-4def-a5ad-d5362f19cd99__get_project_url",
+      "Bash(npm audit *)",
+      "Bash(node -e \"console.log\\(typeof process.loadEnvFile\\)\")",
+      "mcp__f9588179-5cbf-4def-a5ad-d5362f19cd99__execute_sql",
+      "Bash(awk 'BEGIN{RS=\"\";c++} END{print c}' MKTG365_plaintext.txt)",
+      "Bash(grep -c '^$' MKTG365_plaintext.txt)",
+      "Bash(awk '{ total += length\\($0\\); count++ } END { print total/count }' MKTG365_plaintext.txt)",
+      "Bash(node -e ' *)",
+      "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"3601b4dd-daf9-412b-8f59-e62cc3714d62\",\"message\":\"What programming language does the course use for statistical analysis, R or Python?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
+      "mcp__f9588179-5cbf-4def-a5ad-d5362f19cd99__get_advisors",
+      "Bash(npx tsc *)",
+      "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"cbd8d7e2-b787-446e-9bce-aac386dfaaae\",\"message\":\"What are the five stages of the marketing research process?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
+      "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"cbd8d7e2-b787-446e-9bce-aac386dfaaae\",\"message\":\"What programming language does the course use for statistical analysis, R or Python?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
+      "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d '{\"message\":\"hello\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
+      "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"00000000-0000-0000-0000-000000000000\",\"message\":\"What is this course about?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')"
     ]
   }
 }

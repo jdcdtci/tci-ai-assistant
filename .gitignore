@@ -36,6 +36,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# course source text, ingested into Supabase rather than committed
+/courses
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
