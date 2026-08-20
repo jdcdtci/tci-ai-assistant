@@ -25,7 +25,9 @@
       "Bash(git push *)",
       "Bash(curl -s -X POST https://tci-ai-assistant.vercel.app/api/chat -H 'Content-Type: application/json' -d '{\"message\":\"What is the capital of France?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
       "Bash(npx vercel *)",
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "Bash(open -e /Users/dielmannmacbook/tci-ai-assistant/.env.local)",
+      "Bash(git check-ignore *)"
     ]
   }
 }
