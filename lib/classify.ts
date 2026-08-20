@@ -2,6 +2,10 @@ import Anthropic from "@anthropic-ai/sdk";
 
 export type Turn = { role: "user" | "assistant"; content: string };
 
+// Documented decision (2026-08-20): a pass/fail verdict is warranted whenever
+// the student's response gives clear evidence of understanding or
+// misunderstanding, whether prompted by an explicit check or volunteered on
+// their own; "none" is reserved for genuinely no evidence either way.
 export type ExchangeClassification = {
   concept: string;
   current_response_has_check: boolean;
@@ -10,12 +14,13 @@ export type ExchangeClassification = {
   // a different one. The row's verdict will judge the check, so the row
   // must be labelled with this, not with `concept`.
   check_concept: string | null;
-  // Verdict on the check asked in the PREVIOUS assistant turn, judged from
-  // the student's latest message. "none" covers both "no prior check" and
-  // "prior check exists but the reply doesn't let us judge it".
+  // Verdict on the student's understanding of the PREVIOUS assistant turn's
+  // content, judged from their latest message. Evidence-based per the rule
+  // above: an explicit check being answered and a volunteered correct (or
+  // incorrect) restatement both count. "none" means no clear evidence.
   prior_check_verdict: "passed" | "failed" | "none";
-  // What that prior check was about. Used to correct the stored concept at
-  // verdict time so concept and verdict always describe the same moment.
+  // What concept that evidence was about. Used to correct the stored concept
+  // at verdict time so concept and verdict always describe the same moment.
   prior_check_concept: string | null;
   rationale: string;
 };
@@ -45,12 +50,12 @@ const CLASSIFIER_TOOL: Anthropic.Tool = {
         type: "string",
         enum: ["passed", "failed", "none"],
         description:
-          "Judge ONLY the comprehension check asked in the previous assistant turn, using the student's latest message as the answer. 'passed' if the student demonstrated correct understanding. 'failed' if they answered but were wrong, confused, or could not answer. 'none' if there was no prior check, or the student's message does not actually attempt to answer it (e.g. they changed the subject).",
+          "Judge whether the student's latest message gives clear evidence of understanding or misunderstanding of what the previous assistant turn covered. 'passed' if they demonstrated correct understanding, either by answering an explicit check correctly or by volunteering a correct restatement or application on their own. 'failed' if their message reveals wrong or confused understanding, prompted or volunteered. 'none' only when there is genuinely no evidence either way, e.g. they asked an unrelated question, changed the subject, or deflected a pending check without attempting it.",
       },
       prior_check_concept: {
         type: ["string", "null"],
         description:
-          "If prior_check_verdict is 'passed' or 'failed', the concept that PRIOR check asked the student to demonstrate, as a short noun phrase. Judge this from the previous assistant turn's check question itself, not from where the conversation has moved since. Null if prior_check_verdict is 'none'.",
+          "If prior_check_verdict is 'passed' or 'failed', the concept the student's evidence was about, as a short noun phrase. For an answered explicit check, judge this from the check question itself, not from where the conversation has moved since. For volunteered evidence, name the concept the student restated or applied. Null if prior_check_verdict is 'none'.",
       },
       rationale: {
         type: "string",
@@ -73,7 +78,7 @@ const CLASSIFIER_SYSTEM = `You classify tutoring exchanges between a course assi
 
 Be strict about what counts as a comprehension check. Asking the student to restate an idea in their own words, apply it to a case, or answer a question about it is a check. Merely explaining, or closing with a generic pleasantry like "does that help?" or "let me know if you want more detail", is not a check.
 
-Be conservative about the prior check verdict. Only report passed or failed when the student's latest message is genuinely an attempt to answer the previous check. If in doubt, report none.
+The prior verdict is about evidence of understanding, not just formal checks. Report passed or failed whenever the student's latest message gives clear evidence of understanding or misunderstanding of what the previous assistant turn covered: answering an explicit check counts, and so does a voluntary restatement, summary, or application the student produced on their own initiative. Report none only when there is genuinely no evidence either way, such as an unrelated question, a topic change, or deflecting a pending check without attempting it. When the evidence is ambiguous, report none rather than guessing.
 
 Concepts attached to checks matter. A row recording a check's result must name what that check asked the student to demonstrate, judged at the moment the check was posed, not the topic the conversation has drifted to since. A turn often explains one idea and then checks a different, more advanced one; label the check by what it actually tests.`;
 

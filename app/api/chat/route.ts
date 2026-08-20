@@ -93,9 +93,35 @@ const MATCH_COUNT = 5;
 // Caps how much conversation is replayed to the model and the classifier.
 const MAX_HISTORY_TURNS = 20;
 
+// How much recent conversation feeds the retrieval query. Kept small: the
+// goal is topical continuity ("what are we discussing"), not replaying the
+// whole conversation into the embedding.
+const RETRIEVAL_CONTEXT_TURNS = 4;
+const RETRIEVAL_CONTEXT_CHARS_PER_TURN = 300;
+
+// A follow-up's literal wording often embeds far from the topic under
+// discussion (e.g. a student answering a check about pricing embeds near
+// pricing material, not the concept being taught). Build the retrieval
+// query from recent conversation context plus the new message so search
+// follows the discussion, not the newest message in isolation. With no
+// history this returns the message unchanged, so first questions retrieve
+// exactly as before.
+function buildRetrievalQuery(priorTurns: Turn[], message: string): string {
+  if (priorTurns.length === 0) return message;
+
+  const context = priorTurns
+    .slice(-RETRIEVAL_CONTEXT_TURNS)
+    .map((t) => t.content.slice(0, RETRIEVAL_CONTEXT_CHARS_PER_TURN))
+    .join("\n");
+
+  return `${context}\n${message}`;
+}
+
 const SYSTEM_PROMPT = `You are a course assistant tutoring a student. Answer using only the course material provided below, and nothing else. Do not use outside knowledge, even if you believe it is accurate.
 
 If the material below does not contain the answer to the student's question, say explicitly that you do not know. Do not guess, and do not fill gaps with information that is not in the material below.
+
+The course material below is retrieved fresh for each message, so it reflects the wording of the latest exchange and may not include passages that grounded your earlier responses in this conversation. Because of that, never treat the absence of something from the material below as evidence that an earlier response of yours was wrong. Never contradict, retract, or cast doubt on something you already told the student in this conversation unless the material below directly conflicts with it, in which case say so explicitly and correct it. If the student asks a follow-up on a topic you already explained and the material below adds nothing new, keep building on what you already established; if you genuinely cannot go deeper, say plainly that the material you have does not add more detail beyond what you have covered, rather than implying the earlier explanation was ungrounded.
 
 Follow this tutoring pattern:
 
@@ -144,7 +170,7 @@ export async function POST(request: NextRequest) {
 
   let queryEmbedding: number[];
   try {
-    queryEmbedding = await embedWithQueue(message);
+    queryEmbedding = await embedWithQueue(buildRetrievalQuery(priorTurns, message));
   } catch (err) {
     return NextResponse.json(
       { error: "Could not generate an embedding for your message right now. Please try again shortly." },
@@ -250,12 +276,13 @@ async function recordExchange({
     `[memory] student=${studentId} concept="${rowConcept}" check_asked=${current_response_has_check} prior_verdict=${prior_check_verdict} :: ${rationale}`,
   );
 
-  // A verdict resolves the check asked in the PREVIOUS turn, which is
-  // already stored as its own row with a null result. Fill that row in
-  // rather than writing the verdict against the current exchange. Exactly
-  // one row is written per turn, so the previous turn's row is simply the
-  // most recent one; matching on "most recent unresolved row" instead
-  // would skip past turns that legitimately had no check.
+  // A verdict resolves the PREVIOUS turn's row, which is stored with a
+  // null result. Per the documented rule in lib/classify.ts, a verdict can
+  // come from an answered explicit check or from a voluntary demonstration
+  // of understanding; either way it judges the previous turn's content.
+  // Exactly one row is written per turn, so the previous turn's row is
+  // simply the most recent one; matching on "most recent unresolved row"
+  // instead would skip past turns that legitimately had no check.
   if (prior_check_verdict !== "none") {
     const { data: priorRow, error: lookupError } = await supabase
       .from("student_interaction_history")
