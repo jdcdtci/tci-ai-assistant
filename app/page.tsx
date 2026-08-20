@@ -11,6 +11,20 @@ type Message = {
 // This build only serves one seeded course; a course picker is future work.
 const COURSE_ID = "cbd8d7e2-b787-446e-9bce-aac386dfaaae";
 
+// No auth yet, so identity is a per-browser id persisted in localStorage.
+// This is a stand-in so the memory system has a stable student to attach
+// history to; real auth replaces it.
+const STUDENT_ID_KEY = "tci-student-id";
+
+function getStudentId(): string {
+  let id = localStorage.getItem(STUDENT_ID_KEY);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(STUDENT_ID_KEY, id);
+  }
+  return id;
+}
+
 // Below this, the quick "Thinking…" indicator matches the normal fast-path
 // experience. Past it, a request is very likely queued behind Voyage's
 // rate limit (which can add up to ~2 minutes under contention) rather than
@@ -44,7 +58,15 @@ export default function Home() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: trimmed, course_id: COURSE_ID }),
+        body: JSON.stringify({
+          message: trimmed,
+          course_id: COURSE_ID,
+          student_id: getStudentId(),
+          // Error bubbles are UI-only, never part of the tutoring transcript.
+          history: messages
+            .filter((m) => m.role !== "error")
+            .map((m) => ({ role: m.role, content: m.content })),
+        }),
       });
       const data = await res.json();
 

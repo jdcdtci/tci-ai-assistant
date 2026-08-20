@@ -1,9 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
 import { embed } from "@/lib/voyage";
 import { getSupabaseServiceClient } from "@/lib/supabase";
+import { classifyExchange, type Turn } from "@/lib/classify";
 
 // Vercel's default function duration (10s) isn't enough headroom for a
 // request that has to queue for Voyage capacity -- a 3-per-60s sliding
@@ -89,9 +90,22 @@ async function embedWithQueue(message: string): Promise<number[]> {
 
 const MATCH_COUNT = 5;
 
-const SYSTEM_PROMPT = `You are a course assistant. Answer the student's question using only the course material provided below, and nothing else. Do not use outside knowledge, even if you believe it is accurate.
+// Caps how much conversation is replayed to the model and the classifier.
+const MAX_HISTORY_TURNS = 20;
+
+const SYSTEM_PROMPT = `You are a course assistant tutoring a student. Answer using only the course material provided below, and nothing else. Do not use outside knowledge, even if you believe it is accurate.
 
 If the material below does not contain the answer to the student's question, say explicitly that you do not know. Do not guess, and do not fill gaps with information that is not in the material below.
+
+Follow this tutoring pattern:
+
+Diagnose. Work out what the student actually understands and where the gap is, using what they have said so far in this conversation. If their question is ambiguous about what they are stuck on, ask before explaining at length.
+
+Explain. Address the specific gap you diagnosed, grounded in the course material. Do not dump everything the material says on the topic.
+
+Check. End your response by asking the student to demonstrate understanding: restate the idea in their own words, apply it to a short case, or answer a specific question about it. This must be a real question that requires them to produce something, not a generic closing like "does that help?" or "let me know if you have questions". Skip the check only when the student asked a purely factual lookup question, or when they are answering a check you just gave and got it right.
+
+Adapt. If the student's answer to a check was wrong or confused, do not simply repeat the same explanation. Approach the idea differently, and target the specific misunderstanding their answer revealed.
 
 Formatting rules: never use em dashes anywhere in your response. Never use bold text. Write in plain prose only.`;
 
@@ -120,11 +134,13 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { message, course_id } = await request.json();
+  const { message, course_id, student_id, history } = await request.json();
 
   if (!message || !course_id) {
     return NextResponse.json({ error: "Both 'message' and 'course_id' are required." }, { status: 400 });
   }
+
+  const priorTurns: Turn[] = Array.isArray(history) ? history.slice(-MAX_HISTORY_TURNS) : [];
 
   let queryEmbedding: number[];
   try {
@@ -157,7 +173,7 @@ export async function POST(request: NextRequest) {
     model: "claude-sonnet-5",
     max_tokens: 2048,
     system: buildSystemPrompt(chunks),
-    messages: [{ role: "user", content: message }],
+    messages: [...priorTurns, { role: "user", content: message }],
   });
 
   const text = response.content
@@ -165,5 +181,133 @@ export async function POST(request: NextRequest) {
     .map((block) => block.text)
     .join("");
 
+  // Classification needs a second model call, so run it after the response
+  // is already on its way to the student. A failure here must never affect
+  // the answer they see.
+  if (student_id) {
+    after(async () => {
+      try {
+        await recordExchange({
+          supabase,
+          studentId: student_id,
+          courseId: course_id,
+          priorTurns,
+          latestUser: message,
+          assistantResponse: text,
+        });
+      } catch (err) {
+        console.error("[memory] failed to record exchange:", err);
+      }
+    });
+  }
+
   return NextResponse.json({ response: text });
+}
+
+type RecordExchangeArgs = {
+  supabase: ReturnType<typeof getSupabaseServiceClient>;
+  studentId: string;
+  courseId: string;
+  priorTurns: Turn[];
+  latestUser: string;
+  assistantResponse: string;
+};
+
+async function recordExchange({
+  supabase,
+  studentId,
+  courseId,
+  priorTurns,
+  latestUser,
+  assistantResponse,
+}: RecordExchangeArgs) {
+  const classification = await classifyExchange(anthropic, priorTurns, latestUser, assistantResponse);
+
+  if (!classification) {
+    console.error("[memory] classifier returned no result; skipping write");
+    return;
+  }
+
+  const {
+    concept,
+    current_response_has_check,
+    check_concept,
+    prior_check_verdict,
+    prior_check_concept,
+    rationale,
+  } = classification;
+
+  // A row that carries a check will later be stamped with that check's
+  // verdict, so it must be labelled with what the check tests, not with
+  // whatever the turn mostly explained. Otherwise the concept and the
+  // verdict end up describing two different moments.
+  const rowConcept = (current_response_has_check && check_concept) || concept;
+
+  // The rationale is deliberately logged rather than stored: the table
+  // schema stays as specified, but the judgment behind each row is
+  // recoverable here if the data ever looks inconsistent.
+  console.log(
+    `[memory] student=${studentId} concept="${rowConcept}" check_asked=${current_response_has_check} prior_verdict=${prior_check_verdict} :: ${rationale}`,
+  );
+
+  // A verdict resolves the check asked in the PREVIOUS turn, which is
+  // already stored as its own row with a null result. Fill that row in
+  // rather than writing the verdict against the current exchange. Exactly
+  // one row is written per turn, so the previous turn's row is simply the
+  // most recent one; matching on "most recent unresolved row" instead
+  // would skip past turns that legitimately had no check.
+  if (prior_check_verdict !== "none") {
+    const { data: priorRow, error: lookupError } = await supabase
+      .from("student_interaction_history")
+      .select("id, concept, comprehension_check_passed")
+      .eq("student_id", studentId)
+      .eq("course_id", courseId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (lookupError) {
+      console.error("[memory] failed to look up prior row:", lookupError.message);
+    } else if (!priorRow) {
+      console.warn("[memory] verdict reported but no prior row exists; skipping resolve");
+    } else if (priorRow.comprehension_check_passed !== null) {
+      console.warn(
+        `[memory] verdict reported but most recent row ${priorRow.id} is already resolved; skipping to avoid overwriting`,
+      );
+    } else {
+      // Re-stamp the concept from the check itself. The row was labelled
+      // when the check was posed; this corrects it if that label drifted.
+      const resolvedConcept = prior_check_concept ?? priorRow.concept;
+
+      const { error: updateError } = await supabase
+        .from("student_interaction_history")
+        .update({
+          comprehension_check_passed: prior_check_verdict === "passed",
+          concept: resolvedConcept,
+        })
+        .eq("id", priorRow.id);
+
+      if (updateError) {
+        console.error("[memory] failed to update prior row:", updateError.message);
+      } else {
+        const corrected = resolvedConcept !== priorRow.concept;
+        console.log(
+          `[memory] resolved prior check on row ${priorRow.id} as ${prior_check_verdict}, concept="${resolvedConcept}"` +
+            (corrected ? ` (corrected from "${priorRow.concept}")` : ""),
+        );
+      }
+    }
+  }
+
+  const { error: insertError } = await supabase.from("student_interaction_history").insert({
+    student_id: studentId,
+    course_id: courseId,
+    concept: rowConcept,
+    // Stays null until the student's next message lets the check be judged.
+    comprehension_check_passed: null,
+  });
+
+  if (insertError) {
+    console.error("[memory] failed to insert row:", insertError.message);
+  }
 }

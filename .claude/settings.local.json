@@ -60,7 +60,8 @@
       "Bash(time curl -s -X POST https://tci-ai-assistant.vercel.app/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"cbd8d7e2-b787-446e-9bce-aac386dfaaae\",\"message\":\"What is the difference between exploratory and descriptive research?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
       "Bash(time curl -s -X POST https://tci-ai-assistant.vercel.app/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"cbd8d7e2-b787-446e-9bce-aac386dfaaae\",\"message\":\"What is a research objective?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
       "Bash(time curl -s -X POST https://tci-ai-assistant.vercel.app/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"cbd8d7e2-b787-446e-9bce-aac386dfaaae\",\"message\":\"What is a management decision problem?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
-      "Bash(echo \"exit code: $?\")"
+      "Bash(echo \"exit code: $?\")",
+      "Bash(node -e \"const { after } = require\\('next/server'\\); console.log\\(typeof after\\)\")"
     ]
   }
 }
