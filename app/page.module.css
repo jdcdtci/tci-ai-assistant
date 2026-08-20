@@ -59,6 +59,17 @@
   padding: 0 4px;
 }
 
+.longWait {
+  align-self: flex-start;
+  font-size: 14px;
+  color: color-mix(in srgb, var(--foreground) 75%, transparent);
+  background: color-mix(in srgb, #2563eb 10%, transparent);
+  border: 1px solid color-mix(in srgb, #2563eb 25%, transparent);
+  padding: 8px 14px;
+  border-radius: 12px;
+  border-bottom-left-radius: 4px;
+}
+
 .inputRow {
   display: flex;
   gap: 8px;

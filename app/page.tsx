@@ -8,10 +8,20 @@ type Message = {
   content: string;
 };
 
+// This build only serves one seeded course; a course picker is future work.
+const COURSE_ID = "cbd8d7e2-b787-446e-9bce-aac386dfaaae";
+
+// Below this, the quick "Thinking…" indicator matches the normal fast-path
+// experience. Past it, a request is very likely queued behind Voyage's
+// rate limit (which can add up to ~2 minutes under contention) rather than
+// just being a slow-but-normal response, so the UI should say so.
+const LONG_WAIT_THRESHOLD_MS = 8_000;
+
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isLongWait, setIsLongWait] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -26,12 +36,15 @@ export default function Home() {
     setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
     setInput("");
     setIsLoading(true);
+    setIsLongWait(false);
+
+    const longWaitTimer = setTimeout(() => setIsLongWait(true), LONG_WAIT_THRESHOLD_MS);
 
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: trimmed }),
+        body: JSON.stringify({ message: trimmed, course_id: COURSE_ID }),
       });
       const data = await res.json();
 
@@ -52,7 +65,9 @@ export default function Home() {
         { role: "error", content: "Network error. Please try again." },
       ]);
     } finally {
+      clearTimeout(longWaitTimer);
       setIsLoading(false);
+      setIsLongWait(false);
     }
   }
 
@@ -68,7 +83,12 @@ export default function Home() {
             </div>
           ))
         )}
-        {isLoading && <div className={styles.typing}>Thinking…</div>}
+        {isLoading && !isLongWait && <div className={styles.typing}>Thinking…</div>}
+        {isLoading && isLongWait && (
+          <div className={styles.longWait}>
+            Still working on this, thanks for your patience.
+          </div>
+        )}
       </div>
       <form className={styles.inputRow} onSubmit={handleSubmit}>
         <input

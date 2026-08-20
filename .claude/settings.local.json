@@ -51,7 +51,15 @@
       "Bash(curl -s -X POST https://tci-ai-assistant.vercel.app/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"cbd8d7e2-b787-446e-9bce-aac386dfaaae\",\"message\":\"can you go deeper on problem definition specifically, with an example\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
       "Bash(npx tsx *)",
       "Bash(echo \"typecheck exit: $?\")",
-      "Bash(git checkout *)"
+      "Bash(git checkout *)",
+      "Bash(git fetch *)",
+      "Bash(git merge *)",
+      "Bash(git stash *)",
+      "Bash(git branch *)",
+      "Bash(time curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"cbd8d7e2-b787-446e-9bce-aac386dfaaae\",\"message\":\"What is the difference between primary and secondary research?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
+      "Bash(time curl -s -X POST https://tci-ai-assistant.vercel.app/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"cbd8d7e2-b787-446e-9bce-aac386dfaaae\",\"message\":\"What is the difference between exploratory and descriptive research?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
+      "Bash(time curl -s -X POST https://tci-ai-assistant.vercel.app/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"cbd8d7e2-b787-446e-9bce-aac386dfaaae\",\"message\":\"What is a research objective?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
+      "Bash(time curl -s -X POST https://tci-ai-assistant.vercel.app/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"cbd8d7e2-b787-446e-9bce-aac386dfaaae\",\"message\":\"What is a management decision problem?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')"
     ]
   }
 }

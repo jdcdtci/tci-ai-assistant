@@ -5,17 +5,87 @@ import { Redis } from "@upstash/redis";
 import { embed } from "@/lib/voyage";
 import { getSupabaseServiceClient } from "@/lib/supabase";
 
+// Vercel's default function duration (10s) isn't enough headroom for a
+// request that has to queue for Voyage capacity -- a 3-per-60s sliding
+// window can force a wait close to a full 60s if the 3 slots were just
+// consumed. 300s is accepted without a platform warning on this project
+// (modern Vercel plans, Hobby included, support up to 300s under Fluid
+// Compute); VOYAGE_MAX_WAIT_MS below stays well under it so there's still
+// room for the Supabase lookup and Claude's completion afterward.
+export const maxDuration = 300;
+
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
+const redis = new Redis({
+  url: process.env.KV_REST_API_URL!,
+  token: process.env.KV_REST_API_TOKEN!,
+});
+
 const ratelimit = new Ratelimit({
-  redis: new Redis({
-    url: process.env.KV_REST_API_URL!,
-    token: process.env.KV_REST_API_TOKEN!,
-  }),
+  redis,
   limiter: Ratelimit.slidingWindow(10, "1 m"),
 });
+
+// Separate from the per-student `ratelimit` above: Voyage's free-tier cap
+// (3 requests/minute) is a single account-wide budget, not per caller, so
+// this uses one fixed key ("global") instead of the requester's IP. Backed
+// by the same Redis instance so the limit is enforced correctly across
+// concurrent serverless instances, not just within one warm process.
+const voyageRatelimit = new Ratelimit({
+  redis,
+  limiter: Ratelimit.slidingWindow(3, "1 m"),
+  prefix: "ratelimit:voyage",
+});
+
+// A 3-per-60s sliding window can force a wait close to a full 60s in the
+// worst case, and concurrent waiters that all wake at the same computed
+// reset time can collide -- only one wins the freed slot, the other has to
+// wait for a second cycle. Budget for a couple of unlucky cycles, with
+// room left under maxDuration for the Supabase lookup and Claude's
+// completion afterward.
+const VOYAGE_MAX_WAIT_MS = 180_000;
+
+async function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Waits for a free slot in the shared Voyage rate limit before embedding,
+// instead of failing immediately. Under no contention, voyageRatelimit.limit()
+// succeeds on the first check and this adds no meaningful delay.
+async function embedWithQueue(message: string): Promise<number[]> {
+  const deadline = Date.now() + VOYAGE_MAX_WAIT_MS;
+
+  while (true) {
+    const { success, reset } = await voyageRatelimit.limit("global");
+
+    if (success) {
+      try {
+        const [embedding] = await embed([message], "query");
+        return embedding;
+      } catch (err) {
+        const errMessage = err instanceof Error ? err.message : String(err);
+        // Voyage's own limiter can still 429 near a sliding-window boundary
+        // even after ours said go; fall through and wait for another slot
+        // rather than failing the student's request outright.
+        if (!errMessage.includes("Voyage AI request failed (429)")) {
+          throw err;
+        }
+      }
+    }
+
+    if (Date.now() >= deadline) {
+      throw new Error("Timed out waiting for embedding capacity.");
+    }
+
+    // Jitter avoids multiple concurrent waiters all retrying at the exact
+    // same computed reset instant and repeatedly colliding over one slot.
+    const jitterMs = Math.floor(Math.random() * 2_000);
+    const waitMs = success ? 5_000 + jitterMs : Math.max(reset - Date.now(), 1_000) + jitterMs;
+    await sleep(Math.min(waitMs, deadline - Date.now()));
+  }
+}
 
 const MATCH_COUNT = 5;
 
@@ -58,7 +128,7 @@ export async function POST(request: NextRequest) {
 
   let queryEmbedding: number[];
   try {
-    [queryEmbedding] = await embed([message], "query");
+    queryEmbedding = await embedWithQueue(message);
   } catch (err) {
     return NextResponse.json(
       { error: "Could not generate an embedding for your message right now. Please try again shortly." },
