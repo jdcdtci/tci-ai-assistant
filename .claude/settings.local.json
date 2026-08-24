@@ -65,7 +65,14 @@
       "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d @/private/tmp/claude-501/-Users-dielmannmacbook-tci-ai-assistant/14a966ff-44ad-463a-b7a0-1c07dcf7bd69/scratchpad/continue-body.json -w '\\\\nHTTP status: %{http_code}\\\\n')",
       "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d @/private/tmp/claude-501/-Users-dielmannmacbook-tci-ai-assistant/14a966ff-44ad-463a-b7a0-1c07dcf7bd69/scratchpad/replay-turn-a.json -w '\\\\nHTTP status: %{http_code}\\\\n')",
       "Bash(tee /tmp/replay_a_response.txt)",
-      "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d @/private/tmp/claude-501/-Users-dielmannmacbook-tci-ai-assistant/14a966ff-44ad-463a-b7a0-1c07dcf7bd69/scratchpad/replay-turn-b.json -w '\\\\nHTTP status: %{http_code}\\\\n')"
+      "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d @/private/tmp/claude-501/-Users-dielmannmacbook-tci-ai-assistant/14a966ff-44ad-463a-b7a0-1c07dcf7bd69/scratchpad/replay-turn-b.json -w '\\\\nHTTP status: %{http_code}\\\\n')",
+      "Bash(curl -s https://tci-ai-assistant.vercel.app)",
+      "Read(//Users/dielmannmacbook/Library/Application Support/com.vercel.cli/**)",
+      "Read(//Users/dielmannmacbook/.local/share/**)",
+      "Read(//Users/dielmannmacbook/**)",
+      "Bash(node -e \"console.log\\(JSON.parse\\(require\\('fs'\\).readFileSync\\(process.env.HOME + '/Library/Application Support/com.vercel.cli/auth.json'\\)\\).token\\)\")",
+      "Bash(curl -s https://api.vercel.com/v9/projects/prj_sGxIu5cGH3xP3hah7KnQeqnzbCGn?teamId=team_25k6avi8FU33xuVXOKOi94UR -H 'Authorization: Bearer __CMDSUB_OUTPUT__')",
+      "Bash(node -e \"console.log\\(new Date\\(1785819073405\\).toString\\(\\)\\)\")"
     ]
   }
 }
