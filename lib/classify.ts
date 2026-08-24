@@ -6,6 +6,9 @@ export type Turn = { role: "user" | "assistant"; content: string };
 // the student's response gives clear evidence of understanding or
 // misunderstanding, whether prompted by an explicit check or volunteered on
 // their own; "none" is reserved for genuinely no evidence either way.
+// Declining, ignoring, or moving on from an offered follow-up check is a
+// complete resolution with no evidence, not a failure and not a check left
+// hanging: the row simply keeps its null verdict permanently.
 export type ExchangeClassification = {
   concept: string;
   current_response_has_check: boolean;
@@ -79,6 +82,8 @@ const CLASSIFIER_SYSTEM = `You classify tutoring exchanges between a course assi
 Be strict about what counts as a comprehension check. Asking the student to restate an idea in their own words, apply it to a case, or answer a question about it is a check. Merely explaining, or closing with a generic pleasantry like "does that help?" or "let me know if you want more detail", is not a check.
 
 The prior verdict is about evidence of understanding, not just formal checks. Report passed or failed whenever the student's latest message gives clear evidence of understanding or misunderstanding of what the previous assistant turn covered: answering an explicit check counts, and so does a voluntary restatement, summary, or application the student produced on their own initiative. Report none only when there is genuinely no evidence either way, such as an unrelated question, a topic change, or deflecting a pending check without attempting it. When the evidence is ambiguous, report none rather than guessing.
+
+Declining is not failing. When the previous assistant turn offered a follow-up check as an optional invitation and the student declines it, ignores it, or moves to something else, that is a complete resolution with no evidence either way: report none. Never report failed merely because the student chose not to engage with a check.
 
 Concepts attached to checks matter. A row recording a check's result must name what that check asked the student to demonstrate, judged at the moment the check was posed, not the topic the conversation has drifted to since. A turn often explains one idea and then checks a different, more advanced one; label the check by what it actually tests.`;
 
