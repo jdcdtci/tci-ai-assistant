@@ -82,7 +82,10 @@
       "Bash(curl -s -X POST https://tci-ai-assistant.vercel.app/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"cbd8d7e2-b787-446e-9bce-aac386dfaaae\",\"message\":\"What is a Likert scale?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
       "Bash(ps -p 63086 -o pid,ppid,command)",
       "Bash(kill 63086)",
-      "Bash(jobs -l)"
+      "Bash(jobs -l)",
+      "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d @/private/tmp/claude-501/-Users-dielmannmacbook-tci-ai-assistant/14a966ff-44ad-463a-b7a0-1c07dcf7bd69/scratchpad/test1_retraction.json -w '\\\\nHTTP status: %{http_code}\\\\n')",
+      "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d @/private/tmp/claude-501/-Users-dielmannmacbook-tci-ai-assistant/14a966ff-44ad-463a-b7a0-1c07dcf7bd69/scratchpad/test2_contamination.json -w '\\\\nHTTP status: %{http_code}\\\\n')",
+      "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d @/private/tmp/claude-501/-Users-dielmannmacbook-tci-ai-assistant/14a966ff-44ad-463a-b7a0-1c07dcf7bd69/scratchpad/test3_ambiguous.json -w '\\\\nHTTP status: %{http_code}\\\\n')"
     ]
   }
 }

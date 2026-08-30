@@ -99,22 +99,76 @@ const MAX_HISTORY_TURNS = 20;
 const RETRIEVAL_CONTEXT_TURNS = 4;
 const RETRIEVAL_CONTEXT_CHARS_PER_TURN = 300;
 
-// A follow-up's literal wording often embeds far from the topic under
-// discussion (e.g. a student answering a check about pricing embeds near
-// pricing material, not the concept being taught). Build the retrieval
-// query from recent conversation context plus the new message so search
-// follows the discussion, not the newest message in isolation. With no
-// history this returns the message unchanged, so first questions retrieve
-// exactly as before.
-function buildRetrievalQuery(priorTurns: Turn[], message: string): string {
-  if (priorTurns.length === 0) return message;
-
-  const context = priorTurns
+function buildRecentContext(priorTurns: Turn[]): string {
+  return priorTurns
     .slice(-RETRIEVAL_CONTEXT_TURNS)
     .map((t) => t.content.slice(0, RETRIEVAL_CONTEXT_CHARS_PER_TURN))
     .join("\n");
+}
 
-  return `${context}\n${message}`;
+// A genuine follow-up's literal wording often embeds far from the topic
+// under discussion (e.g. a student answering a check about pricing embeds
+// near pricing material, not the concept being taught), which is why
+// recent context gets folded into the retrieval query below. But blindly
+// including it is wrong the moment the student has changed topics: a short
+// off-topic detour (e.g. an unrelated question, then back to the original
+// thread) can dominate the embedding and drag retrieval away from a new,
+// on-topic question entirely -- confirmed live, not hypothetical (see
+// SESSION_NOTES.md). isFollowUpOnTopic decides which case this is before
+// any context is included, rather than including it and hoping the new
+// message's wording is strong enough to compete.
+function buildRetrievalQuery(recentContext: string, message: string): string {
+  if (!recentContext) return message;
+  return `${recentContext}\n${message}`;
+}
+
+const RELEVANCE_TOOL: Anthropic.Tool = {
+  name: "record_relevance",
+  description: "Record whether the student's new message continues the topic of the recent conversation.",
+  input_schema: {
+    type: "object",
+    properties: {
+      is_follow_up: {
+        type: "boolean",
+        description:
+          "True if the new message continues, elaborates on, or asks about the same topic as the recent conversation below. False if it introduces a new, unrelated topic or question -- including a message that returns to an earlier topic after an intervening unrelated detour; judge only against the recent conversation shown, not the whole session.",
+      },
+    },
+    required: ["is_follow_up"],
+  },
+};
+
+// Deliberately a fast Claude call rather than a second Voyage embedding:
+// Voyage's account-wide rate limit (see embedWithQueue above) is the
+// scarce, actively-queued resource in this app; Claude has no equivalent
+// constraint here. Only called when there is history -- buildRetrievalQuery
+// already skips context entirely on a first message, so there is nothing
+// to judge relevance against yet.
+async function isFollowUpOnTopic(priorTurns: Turn[], message: string): Promise<boolean> {
+  const recent = priorTurns
+    .slice(-RETRIEVAL_CONTEXT_TURNS)
+    .map((t) => `${t.role === "user" ? "STUDENT" : "ASSISTANT"}: ${t.content}`)
+    .join("\n\n");
+
+  const result = await anthropic.messages.create({
+    model: "claude-sonnet-5",
+    max_tokens: 128,
+    system:
+      "You determine whether a student's new message continues the topic of a recent conversation, or introduces something unrelated. Call record_relevance exactly once.",
+    tools: [RELEVANCE_TOOL],
+    tool_choice: { type: "tool", name: "record_relevance" },
+    messages: [
+      {
+        role: "user",
+        content: `Recent conversation:\n\n${recent}\n\nStudent's new message: ${message}`,
+      },
+    ],
+  });
+
+  const toolUse = result.content.find((block) => block.type === "tool_use");
+  if (!toolUse || toolUse.type !== "tool_use") return true;
+
+  return (toolUse.input as { is_follow_up: boolean }).is_follow_up;
 }
 
 const SYSTEM_PROMPT = `You are a course assistant tutoring a student. Answer using only the course material provided below, and nothing else. Do not use outside knowledge, even if you believe it is accurate.
@@ -172,9 +226,29 @@ export async function POST(request: NextRequest) {
 
   const priorTurns: Turn[] = Array.isArray(history) ? history.slice(-MAX_HISTORY_TURNS) : [];
 
+  let retrievalQuery = message;
+  if (priorTurns.length > 0) {
+    let isFollowUp: boolean;
+    try {
+      isFollowUp = await isFollowUpOnTopic(priorTurns, message);
+    } catch (err) {
+      // Fail open to the augmented query: if the relevance check itself is
+      // unavailable, degrade to pre-fix behavior (always include context)
+      // rather than silently dropping context that a genuine follow-up
+      // still needs.
+      isFollowUp = true;
+    }
+
+    if (isFollowUp) {
+      retrievalQuery = buildRetrievalQuery(buildRecentContext(priorTurns), message);
+    }
+
+    console.log(`[retrieval] follow_up=${isFollowUp} message="${message}"`);
+  }
+
   let queryEmbedding: number[];
   try {
-    queryEmbedding = await embedWithQueue(buildRetrievalQuery(priorTurns, message));
+    queryEmbedding = await embedWithQueue(retrievalQuery);
   } catch (err) {
     return NextResponse.json(
       { error: "Could not generate an embedding for your message right now. Please try again shortly." },

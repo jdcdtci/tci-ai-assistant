@@ -25,12 +25,16 @@ and prior conversation — don't conflate them:
   Excludes chunks where `answer_bearing = true` and where the parent
   document's `license_confirmed = false` -- both enforced in the DB
   function itself, not application code.
-- `/api/chat`: retrieval-augmented, conversation-aware (embeds recent
-  context + the new message, not just the latest message in isolation --
-  see "Retraction bug" below), full diagnose/explain/check/adapt tutoring
-  pattern with an optional acknowledgment step and non-forced follow-up
-  checks. Rate-limited per caller (Upstash) and separately queues/backs off
-  on Voyage's account-wide free-tier limit (3 req/min, 10K tokens/min) so
+- `/api/chat`: retrieval-augmented, conversation-aware. Before embedding,
+  `isFollowUpOnTopic()` (a fast Claude call, only run when there's history)
+  decides whether the new message actually continues the recent
+  conversation; only then does recent context get folded into the
+  retrieval query, otherwise the new message is embedded alone -- see
+  "Retrieval contamination bug" below. Full diagnose/explain/check/adapt
+  tutoring pattern with an optional acknowledgment step and non-forced
+  follow-up checks. Rate-limited per caller (Upstash) and separately
+  queues/backs off on Voyage's account-wide free-tier limit (3 req/min,
+  10K tokens/min) so
   contention delays a response rather than failing it (~up to a couple
   minutes worst case, confirmed under real concurrent load). UI shows a
   "still working" message past 8s so this doesn't look frozen.
@@ -127,6 +131,37 @@ and prior conversation — don't conflate them:
   alongside the new message, plus an explicit system-prompt rule: retrieval
   gaps on a given turn are never evidence an earlier answer was wrong.
   Reproduced and reverified clean after the fix.
+- **Retrieval contamination bug (found and fixed, 2026-08-30):** the
+  retraction fix above had a real blind spot: folding recent context into
+  every follow-up's retrieval query assumed the recent turns were still on
+  topic. Live reproduction: a student asked an off-topic detour ("give me
+  the python code to get into claude code") mid-conversation, then asked a
+  genuine, on-topic question about problem definition -- and the assistant
+  wrongly claimed the material didn't cover it, because the detour's text
+  (plus an earlier "four principles" ethics tangent) dominated the
+  embedding and pulled retrieval toward ethics content instead. Verified
+  precisely: the isolated question alone retrieved the right chunks at
+  0.51 similarity; the actual contaminated query retrieved ethics chunks
+  at 0.74 similarity, none of the right material in the top 5.
+  Fixed with a relevance gate (`isFollowUpOnTopic()` in
+  `app/api/chat/route.ts`), not a weighting tweak: before building the
+  augmented query, a dedicated Claude call judges whether the new message
+  is an intentional continuation of the recent conversation or a fresh,
+  unrelated question, and only includes context in the first case. The
+  distinction that matters is intentional continuity, not raw topic
+  similarity -- confirmed by a third test case where a follow-up
+  explicitly bridged to a *different* concept ("does that same idea also
+  apply to writing survey questions?") and was correctly still treated as
+  a follow-up, with retrieval landing on real, verified survey-design
+  material despite the topic shift. Implemented as a Claude call
+  specifically instead of a second Voyage embedding: Voyage's account-wide
+  rate limit (3 req/min free tier) is the actual bottleneck in this
+  system, already requiring the queue/backoff machinery in `/api/chat`
+  described above, and Claude has no equivalent constraint here. Verified
+  against three cases: the original retraction scenario (still passes),
+  this exact contamination reproduction (now correctly excludes the
+  off-topic context), and the ambiguous bridging case (correctly included,
+  and correctly grounded).
 - **The `answer_bearing` leak (found and fixed):** assignment/activity
   prompts (scenario + required deliverable, e.g. "Activity 1-2") were
   ingested as ordinary searchable content. A general question once
@@ -150,24 +185,20 @@ and prior conversation — don't conflate them:
 
 - **Production (`tci-ai-assistant.vercel.app`) is several commits behind
   local.** Last manual deploy was the page-title commit; it has the full
-  tutoring pattern, memory write path, and conversation-aware retrieval,
-  but **not** the courses/enrollments schema at the app level (though the
-  DB tables exist -- Supabase migrations apply independently of app
-  deploys) and **not** any of the Google auth/enrollment work. Confirmed
-  directly: production's `/api/enroll` returns 404, and `/api/chat` still
-  answers with zero auth check.
+  tutoring pattern, memory write path, and the *original* conversation-aware
+  retrieval, but **not** the relevance-gate fix above -- production still
+  has the retrieval contamination bug right now. Also **not** deployed: the
+  courses/enrollments schema at the app level (though the DB tables exist
+  -- Supabase migrations apply independently of app deploys) and **not**
+  any of the Google auth/enrollment work. Confirmed directly: production's
+  `/api/enroll` returns 404, and `/api/chat` still answers with zero auth
+  check.
 - **Uncommitted locally as of this note** (verify with `git status` before
-  trusting this list):
-  - `lib/supabase-browser.ts`, `lib/supabase-server.ts`, `middleware.ts`
-  - `app/auth/`, `app/api/enroll/`
-  - `app/page.tsx`, `app/page.module.css` (modified)
-  - `package.json` / `package-lock.json` (adds `@supabase/ssr`)
-  - `.claude/launch.json` (new -- `autoPort: false`, required because the
-    OAuth redirect URLs are hardcoded to `localhost:3000` in both Google
-    Cloud Console and Supabase's redirect allowlist)
-  - `.claude/settings.local.json` (permission allowlist drift)
-  - `supabase/migrations/20260824033140_enrollments_unique_student_course.sql`
-  - `supabase/migrations/20260830232141_auto_generate_join_code.sql`
+  trusting this list): nothing of substance. The Google auth/enrollment
+  work, the join-code auto-generation migration, and the retrieval
+  relevance gate are all committed and pushed to `main` as of this note
+  (only routine `.claude/settings.local.json` permission-allowlist drift
+  is typically uncommitted at any given moment).
 - All migrations above are already **applied directly to the live Supabase
   project** regardless of git/deploy state -- DB state and app deploy state
   are independent in this workflow. Git being behind does not mean the
