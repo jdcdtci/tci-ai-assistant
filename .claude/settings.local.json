@@ -72,7 +72,17 @@
       "Read(//Users/dielmannmacbook/**)",
       "Bash(node -e \"console.log\\(JSON.parse\\(require\\('fs'\\).readFileSync\\(process.env.HOME + '/Library/Application Support/com.vercel.cli/auth.json'\\)\\).token\\)\")",
       "Bash(curl -s https://api.vercel.com/v9/projects/prj_sGxIu5cGH3xP3hah7KnQeqnzbCGn?teamId=team_25k6avi8FU33xuVXOKOi94UR -H 'Authorization: Bearer __CMDSUB_OUTPUT__')",
-      "Bash(node -e \"console.log\\(new Date\\(1785819073405\\).toString\\(\\)\\)\")"
+      "Bash(node -e \"console.log\\(new Date\\(1785819073405\\).toString\\(\\)\\)\")",
+      "mcp__f9588179-5cbf-4def-a5ad-d5362f19cd99__get_project",
+      "mcp__f9588179-5cbf-4def-a5ad-d5362f19cd99__get_publishable_keys",
+      "Bash(curl -s \"https://guczpkqjetvauokttouo.supabase.co/auth/v1/authorize?provider=google&redirect_to=http://localhost:3000/auth/callback\" -o /dev/null -w \"HTTP status: %{http_code}\\\\n\")",
+      "Bash(curl -s \"https://guczpkqjetvauokttouo.supabase.co/auth/v1/authorize?provider=google&redirect_to=http://localhost:3000/auth/callback\")",
+      "Bash(curl -s \"https://guczpkqjetvauokttouo.supabase.co/auth/v1/authorize?provider=google&redirect_to=http://localhost:3000/auth/callback\" -o /tmp/auth_check.html -w \"HTTP status: %{http_code}\\\\n\")",
+      "Bash(curl -s -o /dev/null -w \"HTTP status: %{http_code}\\\\n\" -X POST https://tci-ai-assistant.vercel.app/api/enroll -H \"Content-Type: application/json\" -d '{\"join_code\":\"test\"}')",
+      "Bash(curl -s -X POST https://tci-ai-assistant.vercel.app/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"cbd8d7e2-b787-446e-9bce-aac386dfaaae\",\"message\":\"What is a Likert scale?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
+      "Bash(ps -p 63086 -o pid,ppid,command)",
+      "Bash(kill 63086)",
+      "Bash(jobs -l)"
     ]
   }
 }

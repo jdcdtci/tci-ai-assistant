@@ -23,6 +23,22 @@
   font-size: 14px;
 }
 
+.centeredScreen {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  max-width: 320px;
+}
+
+.centeredScreen .inputRow {
+  width: 100%;
+  border-top: none;
+  padding-top: 0;
+}
+
 .message {
   max-width: 80%;
   padding: 10px 14px;

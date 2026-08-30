@@ -2,28 +2,14 @@
 
 import { useState, useRef, useEffect, FormEvent } from "react";
 import styles from "./page.module.css";
+import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
 
 type Message = {
   role: "user" | "assistant" | "error";
   content: string;
 };
 
-// This build only serves one seeded course; a course picker is future work.
-const COURSE_ID = "cbd8d7e2-b787-446e-9bce-aac386dfaaae";
-
-// No auth yet, so identity is a per-browser id persisted in localStorage.
-// This is a stand-in so the memory system has a stable student to attach
-// history to; real auth replaces it.
-const STUDENT_ID_KEY = "tci-student-id";
-
-function getStudentId(): string {
-  let id = localStorage.getItem(STUDENT_ID_KEY);
-  if (!id) {
-    id = crypto.randomUUID();
-    localStorage.setItem(STUDENT_ID_KEY, id);
-  }
-  return id;
-}
+type AuthUser = { id: string; email: string };
 
 // Below this, the quick "Thinking…" indicator matches the normal fast-path
 // experience. Past it, a request is very likely queued behind Voyage's
@@ -32,6 +18,12 @@ function getStudentId(): string {
 const LONG_WAIT_THRESHOLD_MS = 8_000;
 
 export default function Home() {
+  const [user, setUser] = useState<AuthUser | null | "loading">("loading");
+  const [course, setCourse] = useState<{ id: string; name: string } | null>(null);
+  const [joinCode, setJoinCode] = useState("");
+  const [joinError, setJoinError] = useState<string | null>(null);
+  const [isJoining, setIsJoining] = useState(false);
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -39,13 +31,65 @@ export default function Home() {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    const supabase = getSupabaseBrowserClient();
+
+    supabase.auth.getUser().then(({ data }) => {
+      setUser(data.user && data.user.email ? { id: data.user.id, email: data.user.email } : null);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user?.email ? { id: session.user.id, email: session.user.email } : null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages]);
+
+  async function handleSignIn() {
+    const supabase = getSupabaseBrowserClient();
+    await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: `${window.location.origin}/auth/callback` },
+    });
+  }
+
+  async function handleJoin(e: FormEvent) {
+    e.preventDefault();
+    const trimmed = joinCode.trim();
+    if (!trimmed || isJoining) return;
+
+    setIsJoining(true);
+    setJoinError(null);
+
+    try {
+      const res = await fetch("/api/enroll", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ join_code: trimmed }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setJoinError(data.error ?? "Something went wrong.");
+      } else {
+        setCourse(data.course);
+      }
+    } catch {
+      setJoinError("Network error. Please try again.");
+    } finally {
+      setIsJoining(false);
+    }
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const trimmed = input.trim();
-    if (!trimmed || isLoading) return;
+    if (!trimmed || isLoading || !course || user === "loading" || !user) return;
 
     setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
     setInput("");
@@ -60,8 +104,8 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: trimmed,
-          course_id: COURSE_ID,
-          student_id: getStudentId(),
+          course_id: course.id,
+          student_id: user.id,
           // Error bubbles are UI-only, never part of the tutoring transcript.
           history: messages
             .filter((m) => m.role !== "error")
@@ -91,6 +135,47 @@ export default function Home() {
       setIsLoading(false);
       setIsLongWait(false);
     }
+  }
+
+  if (user === "loading") {
+    return <div className={styles.page} />;
+  }
+
+  if (!user) {
+    return (
+      <div className={styles.page}>
+        <div className={styles.centeredScreen}>
+          <p className={styles.empty}>Sign in to continue.</p>
+          <button className={styles.send} onClick={handleSignIn}>
+            Sign in with Google
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!course) {
+    return (
+      <div className={styles.page}>
+        <div className={styles.centeredScreen}>
+          <p className={styles.empty}>Enter your course join code.</p>
+          <form className={styles.inputRow} onSubmit={handleJoin}>
+            <input
+              className={styles.input}
+              value={joinCode}
+              onChange={(e) => setJoinCode(e.target.value)}
+              placeholder="Join code…"
+              disabled={isJoining}
+              autoFocus
+            />
+            <button className={styles.send} type="submit" disabled={isJoining || !joinCode.trim()}>
+              Join
+            </button>
+          </form>
+          {joinError && <div className={styles.error}>{joinError}</div>}
+        </div>
+      </div>
+    );
   }
 
   return (
