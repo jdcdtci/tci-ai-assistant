@@ -234,26 +234,37 @@ and prior conversation — don't conflate them:
 
 ## Current state / what's NOT deployed
 
-- **Production (`tci-ai-assistant.vercel.app`) is several commits behind
-  local as of this note.** Last manual deploy was the page-title commit;
-  it has the full tutoring pattern and memory write path, but **not** the
-  conversation-aware retrieval, the relevance-gate fix, the courses/
-  enrollments schema at the app level (though the DB tables exist --
-  Supabase migrations apply independently of app deploys), any of the
-  Google auth/enrollment work, or tonight's password gate / key rotation
-  commit. A deploy was requested at the end of this session -- check
-  `git log` on the deployed commit (or just redeploy) to confirm what's
-  actually live before assuming this description is current; this file
-  will not have been updated again after that deploy.
+- **Production (`tci-ai-assistant.vercel.app`) is caught up as of this
+  note** -- deployed via `vercel --prod` at the very end of this session
+  (deployment `dpl_HvbjAsbp41yvWScCBwU539FEnpc9`). It now has everything:
+  the full tutoring pattern and memory write path, conversation-aware
+  retrieval with the relevance-gate fix, the courses/enrollments schema at
+  the app level, the Google auth/join-code enrollment work, and tonight's
+  password gate plus key rotation. Verified directly against the live
+  domain, not assumed: unauthenticated and wrong-password requests are
+  blocked (`401`) on both the homepage and a direct `POST /api/chat` with
+  a fully valid payload; the correct password grants access and a real
+  chat request returns a complete, correctly-grounded response, confirming
+  the new Supabase secret key and the new Anthropic key plus
+  workspace-id header all work together live. Treat this as a snapshot of
+  that moment, not a guarantee of current state -- check `git log` against
+  what's actually deployed (`vercel inspect` or a fresh `vercel --prod`)
+  before assuming production still matches `main`, especially once more
+  commits land after this note.
+- **The whole production site, including sign-in, is now behind the
+  temporary `SITE_PASSWORD` gate.** This is deliberate (see "Real secret
+  exposure" above) but worth remembering if production ever looks
+  "broken" to an outside visitor -- it isn't, it's gated. Removing the
+  gate later just means deleting `SITE_PASSWORD` from Vercel (or emptying
+  it), since the middleware no-ops when the var is unset.
 - **Uncommitted locally as of this note:** nothing of substance beyond
   routine `.claude/settings.local.json` permission-allowlist drift. All
   of tonight's work (retrieval relevance gate, session notes, password
   gate, Supabase secret key migration, Anthropic workspace-id fix) is
-  committed and pushed to `main`.
+  committed and pushed to `main`, and now deployed.
 - All migrations above are already **applied directly to the live Supabase
   project** regardless of git/deploy state -- DB state and app deploy state
-  are independent in this workflow. Git being behind does not mean the
-  database is behind.
+  are independent in this workflow.
 - Required env vars (values live in `.env.local`, gitignored, never
   written to this file): `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID`
   (only needed if the key isn't scoped to a single workspace -- see above),
@@ -261,20 +272,21 @@ and prior conversation — don't conflate them:
   `SUPABASE_SERVICE_ROLE_KEY`, see above), `SITE_PASSWORD` (temporary
   whole-site gate, see above), `NEXT_PUBLIC_SUPABASE_URL`,
   `NEXT_PUBLIC_SUPABASE_ANON_KEY`. As of this note, Vercel's Production
-  environment has the *pre-migration* set (`SUPABASE_SERVICE_ROLE_KEY`,
-  no `SITE_PASSWORD`/`ANTHROPIC_WORKSPACE_ID`/`SUPABASE_SECRET_KEY`) from
-  earlier deploys -- these need to be added before deploying tonight's
-  work, the same way `NEXT_PUBLIC_SUPABASE_URL`/`ANON_KEY` had to be added
-  before the auth deploy earlier this session. Verify with `vercel env ls
-  production` rather than assuming either state.
+  environment has the full current set, including a corrected
+  `ANTHROPIC_API_KEY` (the one that had been live in Vercel was 27 days
+  stale -- the pre-rotation key -- and got overwritten during this
+  deploy). `SUPABASE_SERVICE_ROLE_KEY` is still present in both
+  `.env.local` and Vercel but is no longer read by any code; see the
+  cleanup item below. Verify with `vercel env ls production` rather than
+  trusting this list indefinitely.
 
 ## In progress / next
 
-1. **Finish the end-to-end enrollment test.** Real Google sign-in is
-   verified working in the browser. Join code `A4D3KAWR` for MKTG365
-   exists. Submitting that code through the actual join-code screen and
-   confirming a real row lands in `enrollments` (currently 0 rows) has
-   **not** happened yet -- this is the very next step.
+1. ~~Finish the end-to-end enrollment test.~~ **Done.** A real
+   `enrollments` row exists: `student_email = goalkeeper.dielmann@gmail.com`,
+   `course_id = cbd8d7e2-b787-446e-9bce-aac386dfaaae` (MKTG365), created
+   via the actual join-code screen with join code `A4D3KAWR`, not seeded
+   directly.
 2. **`/api/chat` still fully trusts the client-supplied `student_id`.**
    It's now sourced from the real authenticated user (good), but the route
    never verifies it server-side against the session the way `/api/enroll`
@@ -290,8 +302,11 @@ and prior conversation — don't conflate them:
 4. Retrieval still doesn't use `student_interaction_history` at all (see
    above) -- that's a real next step for the memory system, separate from
    the enrollment work.
-5. Deploying any of this to production is a deliberate separate step
-   (`vercel --prod`, manually) -- nothing here goes live on its own.
+5. Everything through tonight's key-rotation work is now deployed (see
+   "Current state" above), but this remains the standing rule going
+   forward: deploying anything new is a deliberate, manual `vercel --prod`
+   step -- nothing goes live on its own, and auto-deploy stays off on
+   purpose (see the git auto-deploy entry above).
 6. **Clean up `SUPABASE_SERVICE_ROLE_KEY`.** No longer referenced in code
    as of tonight's secret-key migration, but the env var itself is still
    sitting in both `.env.local` and Vercel. Safe to remove once confirmed
