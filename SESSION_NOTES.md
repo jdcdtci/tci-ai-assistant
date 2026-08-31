@@ -1,6 +1,6 @@
 # Session Notes
 
-Last updated: 2026-08-30. This project spans many sessions over days, not one
+Last updated: 2026-08-31. This project spans many sessions over days, not one
 sitting. This file exists so a fresh session (or a future you with a fresh
 context window) can pick up accurately without re-deriving decisions already
 made. Treat it as a snapshot, not a live source of truth — always verify
@@ -180,34 +180,93 @@ and prior conversation — don't conflate them:
   path to production, on purpose, so nothing ships without a deliberate
   step. If a future session finds auto-deploy active again, that's a
   regression, not a feature -- it was explicitly turned off for a reason.
+- **Real secret exposure during local debugging, and what came out of it
+  (2026-08-31).** A local `cat`/`cat -A` command run to inspect
+  `.env.local`'s structure printed the file's actual plaintext values
+  (`ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`,
+  `SITE_PASSWORD`) into a tool-output transcript. All four were treated as
+  compromised and rotated. Separately, a first attempt at generating a new
+  Supabase secret key was *also* exposed, because it was pasted in
+  `KEY:VALUE` label format rather than `KEY=VALUE`, defeating a redaction
+  pattern that only masked content after `=`. Lesson for any future
+  `.env.local` inspection in this project: check structure via name-only
+  extraction and line *lengths*, never raw content -- `grep -o
+  "^[A-Z_]*="`, `awk '{print NR": "length($0)}'`, never `cat`/`cat -A`/
+  `sed` patterns that assume a specific separator character.
+  Separately, `.env.local` was repeatedly and silently corrupted mid-session
+  by a stale editor window (almost certainly TextEdit) that had the file
+  open from earlier in the session and overwrote it with an outdated
+  in-memory buffer on every save, regardless of what was actually being
+  edited at the time -- erasing unrelated recent additions each time.
+  Close any existing editor windows for `.env.local` before reopening it
+  partway through a long session; a single stale window undid several
+  rounds of otherwise-correct edits before this was diagnosed.
+  Three real fixes came out of this, all committed together
+  (`64a7b7a`):
+  - **A temporary whole-site password gate** (`middleware.ts`, HTTP Basic
+    Auth, gated on `SITE_PASSWORD`) in front of every route including API
+    routes, for testing only -- not a replacement for the per-course
+    `access_mode` system. No-op if `SITE_PASSWORD` is unset. Verified: a
+    direct `POST /api/chat` with a fully valid payload is blocked before
+    the route runs, without the correct password.
+  - **Migrated off the legacy Supabase `service_role` key to the newer
+    secret key format** (`sb_secret_...`, `SUPABASE_SECRET_KEY`), because
+    `service_role` turned out to be impossible to rotate individually --
+    it's a long-lived JWT tied to the whole project's shared JWT secret,
+    confirmed via Supabase's current docs. The new key has the same
+    effective RLS-bypass permissions, confirmed via Supabase's docs and a
+    direct live test (RLS-gated table read plus the
+    `match_knowledge_chunks` RPC). `SUPABASE_SERVICE_ROLE_KEY` is no
+    longer referenced anywhere in code (`lib/supabase.ts` was the only
+    reference) but the env var itself hasn't been deleted from
+    `.env.local` or Vercel yet -- safe cleanup candidate once confirmed
+    nothing else depends on it.
+  - **Fixed `/api/chat`'s Anthropic client for the newly-rotated
+    `ANTHROPIC_API_KEY`**, which turned out to be a personal key not
+    scoped to a single workspace, requiring an `anthropic-workspace-id`
+    header on every request (confirmed via Anthropic's current docs).
+    Sent via `defaultHeaders` only when `ANTHROPIC_WORKSPACE_ID` is
+    configured, so a differently-scoped (single-workspace) key would keep
+    working unchanged with no header needed.
+  All three verified together in one live request chain: password gate ->
+  Supabase secret key (retrieval) -> Anthropic workspace-id header
+  (completion), full real tutoring response returned successfully.
 
 ## Current state / what's NOT deployed
 
 - **Production (`tci-ai-assistant.vercel.app`) is several commits behind
-  local.** Last manual deploy was the page-title commit; it has the full
-  tutoring pattern, memory write path, and the *original* conversation-aware
-  retrieval, but **not** the relevance-gate fix above -- production still
-  has the retrieval contamination bug right now. Also **not** deployed: the
-  courses/enrollments schema at the app level (though the DB tables exist
-  -- Supabase migrations apply independently of app deploys) and **not**
-  any of the Google auth/enrollment work. Confirmed directly: production's
-  `/api/enroll` returns 404, and `/api/chat` still answers with zero auth
-  check.
-- **Uncommitted locally as of this note** (verify with `git status` before
-  trusting this list): nothing of substance. The Google auth/enrollment
-  work, the join-code auto-generation migration, and the retrieval
-  relevance gate are all committed and pushed to `main` as of this note
-  (only routine `.claude/settings.local.json` permission-allowlist drift
-  is typically uncommitted at any given moment).
+  local as of this note.** Last manual deploy was the page-title commit;
+  it has the full tutoring pattern and memory write path, but **not** the
+  conversation-aware retrieval, the relevance-gate fix, the courses/
+  enrollments schema at the app level (though the DB tables exist --
+  Supabase migrations apply independently of app deploys), any of the
+  Google auth/enrollment work, or tonight's password gate / key rotation
+  commit. A deploy was requested at the end of this session -- check
+  `git log` on the deployed commit (or just redeploy) to confirm what's
+  actually live before assuming this description is current; this file
+  will not have been updated again after that deploy.
+- **Uncommitted locally as of this note:** nothing of substance beyond
+  routine `.claude/settings.local.json` permission-allowlist drift. All
+  of tonight's work (retrieval relevance gate, session notes, password
+  gate, Supabase secret key migration, Anthropic workspace-id fix) is
+  committed and pushed to `main`.
 - All migrations above are already **applied directly to the live Supabase
   project** regardless of git/deploy state -- DB state and app deploy state
   are independent in this workflow. Git being behind does not mean the
   database is behind.
 - Required env vars (values live in `.env.local`, gitignored, never
-  written to this file): `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`,
-  `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_URL`,
-  `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Production has its own copies set in
-  Vercel (Production + Preview environments) from earlier deploys.
+  written to this file): `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID`
+  (only needed if the key isn't scoped to a single workspace -- see above),
+  `VOYAGE_API_KEY`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY` (replaces
+  `SUPABASE_SERVICE_ROLE_KEY`, see above), `SITE_PASSWORD` (temporary
+  whole-site gate, see above), `NEXT_PUBLIC_SUPABASE_URL`,
+  `NEXT_PUBLIC_SUPABASE_ANON_KEY`. As of this note, Vercel's Production
+  environment has the *pre-migration* set (`SUPABASE_SERVICE_ROLE_KEY`,
+  no `SITE_PASSWORD`/`ANTHROPIC_WORKSPACE_ID`/`SUPABASE_SECRET_KEY`) from
+  earlier deploys -- these need to be added before deploying tonight's
+  work, the same way `NEXT_PUBLIC_SUPABASE_URL`/`ANON_KEY` had to be added
+  before the auth deploy earlier this session. Verify with `vercel env ls
+  production` rather than assuming either state.
 
 ## In progress / next
 
@@ -233,3 +292,7 @@ and prior conversation — don't conflate them:
    the enrollment work.
 5. Deploying any of this to production is a deliberate separate step
    (`vercel --prod`, manually) -- nothing here goes live on its own.
+6. **Clean up `SUPABASE_SERVICE_ROLE_KEY`.** No longer referenced in code
+   as of tonight's secret-key migration, but the env var itself is still
+   sitting in both `.env.local` and Vercel. Safe to remove once confirmed
+   nothing else in the project (scripts, other tooling) still reads it.
