@@ -15,8 +15,15 @@ import { classifyExchange, type Turn } from "@/lib/classify";
 // room for the Supabase lookup and Claude's completion afterward.
 export const maxDuration = 300;
 
+// Personal and service-account API keys can be scoped to a single
+// workspace (no header needed) or left multi-workspace, which requires
+// sending anthropic-workspace-id on every request. Support both without
+// requiring a specific key type: send the header only when configured.
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
+  defaultHeaders: process.env.ANTHROPIC_WORKSPACE_ID
+    ? { "anthropic-workspace-id": process.env.ANTHROPIC_WORKSPACE_ID }
+    : undefined,
 });
 
 const redis = new Redis({

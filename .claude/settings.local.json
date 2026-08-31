@@ -85,7 +85,20 @@
       "Bash(jobs -l)",
       "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d @/private/tmp/claude-501/-Users-dielmannmacbook-tci-ai-assistant/14a966ff-44ad-463a-b7a0-1c07dcf7bd69/scratchpad/test1_retraction.json -w '\\\\nHTTP status: %{http_code}\\\\n')",
       "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d @/private/tmp/claude-501/-Users-dielmannmacbook-tci-ai-assistant/14a966ff-44ad-463a-b7a0-1c07dcf7bd69/scratchpad/test2_contamination.json -w '\\\\nHTTP status: %{http_code}\\\\n')",
-      "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d @/private/tmp/claude-501/-Users-dielmannmacbook-tci-ai-assistant/14a966ff-44ad-463a-b7a0-1c07dcf7bd69/scratchpad/test3_ambiguous.json -w '\\\\nHTTP status: %{http_code}\\\\n')"
+      "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d @/private/tmp/claude-501/-Users-dielmannmacbook-tci-ai-assistant/14a966ff-44ad-463a-b7a0-1c07dcf7bd69/scratchpad/test3_ambiguous.json -w '\\\\nHTTP status: %{http_code}\\\\n')",
+      "Bash(curl -s https://tci-ai-assistant.vercel.app -w \"\\\\nHTTP status: %{http_code}\\\\n\")",
+      "Bash(open -e .env.local)",
+      "Bash(curl -s -o /dev/null -w \"HTTP status: %{http_code}\\\\n\" http://localhost:3000)",
+      "Bash(curl -s -o /dev/null -w \"HTTP status: %{http_code}\\\\n\" -u \"x:wrongpassword\" http://localhost:3000)",
+      "Bash(curl -s -X POST http://localhost:3000/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"cbd8d7e2-b787-446e-9bce-aac386dfaaae\",\"message\":\"What is a Likert scale?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
+      "Bash(curl -s -X POST -u x:wrongpassword http://localhost:3000/api/chat -H 'Content-Type: application/json' -d '{\"course_id\":\"cbd8d7e2-b787-446e-9bce-aac386dfaaae\",\"message\":\"What is a Likert scale?\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
+      "Bash(curl -s -X POST http://localhost:3000/api/enroll -H 'Content-Type: application/json' -d '{\"join_code\":\"A4D3KAWR\"}' -w '\\\\nHTTP status: %{http_code}\\\\n')",
+      "Bash(awk '{print NR\": length=\"length\\($0\\)}' .env.local)",
+      "Bash(awk '{print NR\": \"length\\($0\\)}' .env.local)",
+      "Bash(xxd)",
+      "mcp__f9588179-5cbf-4def-a5ad-d5362f19cd99__search_docs",
+      "Bash(awk \"{print NR\\\\\": \\\\\"length\\(\\\\$0\\)}\" .env.local)",
+      "WebFetch(domain:docs.claude.com)"
     ]
   }
 }
