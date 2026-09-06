@@ -1546,6 +1546,96 @@ yet. Both sets held. That is a mixed-history result and should stay
 described as one; 17/17 is the correct coverage count, not evidence that
 all 17 carry equal weight.
 
+## DEFECT: /api/chat serves any course to any caller (course_id is trusted from the client)
+
+Found and **proven** 2026-09-06 by building a second course specifically to
+test it, since a cross-course leak previously had no second course to leak
+from. Reported as a real defect, not a backlog item.
+
+**The two findings, checked separately.**
+
+**1. `course_id` is taken verbatim from the request body, and nothing
+verifies entitlement to it.** `app/api/chat/route.ts` destructures
+`course_id` from `await request.json()` and uses it unchecked in four
+places: the `match_knowledge_chunks` call, the course lookup for
+persona/crisis resource, the `distress_events` write, and the memory write.
+**`/api/chat` performs no session verification at all** (no
+`getSupabaseServerClient`, no `auth.getUser()`), and **`enrollments` is read
+by nothing anywhere in the codebase** — `/api/enroll` writes it and no code
+path ever consults it. The table that records entitlement has no consumer,
+which is the same "control that looks satisfied while doing nothing"
+pattern already found twice this session in escalation config.
+
+**2. Course scoping IS in the deployed function, but it is a different KIND
+of guarantee from the other filters, and that distinction is the whole
+problem.** Read directly from `pg_get_functiondef`, not the migration:
+
+```
+where kd.course_id = match_course_id
+  and kd.license_confirmed = true
+  and kc.answer_bearing = false
+  and kc.assessment_scope = false
+```
+
+`license_confirmed`, `answer_bearing` and `assessment_scope` are **fixed
+predicates** the caller cannot influence, which is why they are real
+guarantees. `kd.course_id = match_course_id` is a **caller-supplied
+parameter**. The function therefore guarantees *partitioning* ("you get
+exactly one course's chunks") but not *entitlement* ("you get the course you
+are allowed to have"). Entitlement is enforced nowhere, in the database or
+in application code.
+
+**Proof, using the same maximum-pressure method as the assessment-scope
+fix.** A second course was created (`ZZTEST_APIARY`, `access_mode` closed)
+with three chunks of deliberately unrelated content (varroa mites, queen
+excluders, foulbrood) so any leak would be unmistakable rather than a
+near-miss.
+
+- **Partitioning holds at the DB layer.** Querying MKTG365 with a beekeeping
+  chunk's **own embedding**, a guaranteed similarity-1.0 top-rank match,
+  returned **zero** beekeeping chunks; only MKTG365 content at 0.50-0.52.
+  The reverse returned only the three beekeeping chunks and no marketing
+  research. Course partitioning is genuinely enforced inside the function.
+- **Entitlement fails at the route.** A caller enrolled **only** in MKTG365,
+  supplying a `student_id` with no enrollment whatsoever, asked
+  "What is a queen excluder and why is it used?" with the apiary
+  `course_id`, and received a **complete, correct, grounded answer from a
+  course it had no relationship with**. Nothing refused it, because nothing
+  checks.
+
+**Severity in context.** Not currently exploitable in production: only one
+course exists, and the whole site sits behind the `SITE_PASSWORD` gate. It
+becomes live the moment a second course exists, and the ingredients are a
+course id (a uuid, not a secret) and an unauthenticated POST. It is
+therefore a defect to fix **before** a second course is created, not after.
+
+**The fix, not yet applied.** Derive `course_id` server-side the same way
+`/api/enroll` derives identity: verify the session with
+`getSupabaseServerClient().auth.getUser()`, then confirm an `enrollments`
+row links that verified email to the requested course, refusing otherwise.
+Per the standing DB-layer discipline this belongs in a
+`can_access_course(student, course)` SQL function rather than a route-level
+`if`, so a future call site cannot omit it — that function was already
+designed during Phase 3 planning and remains unbuilt.
+
+**Why it was not applied immediately:** this changes `/api/chat`'s contract,
+and rule 1 requires a UI-level test for exactly that. The UI test needs a
+Google sign-in that cannot be completed here (credential plus CAPTCHA), and
+production sign-in is separately broken (see below). So the fix is specified
+and waiting on the owner rather than shipped unverified.
+
+## Note: a second person has enrolled in MKTG365
+
+`enrollments` currently holds **two** rows, both MKTG365, both 2026-09-06:
+`goalkeeper.dielmann@gmail.com` (06:30) and **`cj.dielmann@gmail.com`
+(06:32)**. Neither was created by this session's testing and both were left
+in place.
+
+This matters beyond bookkeeping: the standing single-responsibility note
+lists "a real student enrolling" as its first trigger condition, and a
+second real person now holds a role in this course. That note's revisit
+condition has therefore **fired** and is no longer hypothetical.
+
 ## BLOCKING: production Google sign-in is non-functional for everyone
 
 Not a rough edge and not a known-issue footnote. **Nobody can sign in on
