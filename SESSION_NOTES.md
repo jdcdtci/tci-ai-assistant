@@ -1834,31 +1834,64 @@ Concept re-stamping also worked, correcting a resolved row's concept from
 "difference between sampling frame and target population" to the check's own
 "sampling frame vs target population".
 
-### One NEW weakness observed, not fixed, not a regression
+### OPEN FINDING: the "Going back to the course material" bridge phrase defeats the relevance gate
 
-While constructing the contamination test I used a variant phrasing:
-"**Going back to the course material**, how do you actually tell a
-management decision problem apart from a marketing research problem?" after
-the same detour. That returned `follow_up=true`, folded the stale ethics and
-Python context in, and produced a wrong answer claiming the material does
-not draw that distinction — while the identical question **without** the
-bridge phrase returned `follow_up=false` and answered correctly, and the
-same variant with **no history** also answered correctly. So the failure is
-caused by the phrase, not by the content being unavailable.
+Found 2026-09-06 while constructing the contamination regression test.
+**Not fixed, deliberately.** Logged in full so the first real tuning pass
+can find it without rediscovering it.
 
-This is notable because the relevance tool's own description says it should
-return false for "a message that returns to an earlier topic after an
-intervening unrelated detour" — which is exactly what "going back to the
-course material" signals. The gate contradicted its own specification on
-that phrasing.
+**The literal trigger phrase**, exactly as tested:
 
-**Deliberately not fixed**, for the same reason nothing else here was
-tuned: it is a single observation, not a characterised failure mode, and
-changing the gate on one sample is the tuning-without-data this stage
-explicitly refused. Recorded as a candidate for the first real tuning pass
-once usage data exists. Worth noting it is a pre-existing sensitivity in the
-gate, not something tonight's changes introduced: the inputs to
-`isFollowUpOnTopic` are unchanged.
+> Going back to the course material, how do you actually tell a management decision problem apart from a marketing research problem?
+
+sent after this history: an ethics question, an answer, the off-topic
+detour "give me the python code to get into claude code", and its refusal.
+
+**What happens.** `isFollowUpOnTopic` returns `follow_up=true`. The stale
+ethics and Python context is folded into the retrieval query, retrieval is
+dragged off target, and the assistant answers *"I don't see that distinction
+drawn explicitly in the material I have"* — a retraction-shaped failure
+about content the course demonstrably covers.
+
+**Three runs isolate the cause precisely. Record all three, because the
+distinction matters for anyone tuning this:**
+
+| Message | History | Gate | Result |
+|---|---|---|---|
+| with "Going back to the course material," | detour history | `follow_up=true` | **wrong**: claims material lacks the distinction |
+| without the phrase, otherwise identical | same detour history | `follow_up=false` | correct: retail chain example, distinction drawn |
+| with the phrase | **no history** | not called | correct |
+
+**Precision point, since it is easy to state this wrongly:** the failure
+does **not** reproduce independent of history. With no history the gate is
+never invoked at all (`isFollowUpOnTopic` only runs when `priorTurns` is
+non-empty), and the answer is correct. The third row's value is not that it
+reproduces, but the opposite: it **proves the content is retrievable**, which
+is what isolates the cause to contamination rather than to missing or
+excluded material. The phrase flips the gate; the history supplies the
+contamination. Both are required. A tuning pass that goes looking for a
+history-independent reproduction will not find one.
+
+**Why it is a genuine defect and not a judgement call.** The relevance
+tool's own description instructs the classifier to return false for "a
+message that returns to an earlier topic after an intervening unrelated
+detour." "Going back to the course material" is precisely that signal,
+stated about as explicitly as a student could state it. The gate contradicted
+its own documented behaviour on the one phrasing that most clearly matches
+the documented exception.
+
+**Not a regression from tonight's work.** `isFollowUpOnTopic`'s inputs are
+unchanged; only its position in the handler moved. This is a pre-existing
+sensitivity that the regression testing surfaced rather than caused.
+
+**Why it was left alone.** One observation is not a characterised failure
+mode, and changing a relevance gate on a single sample is exactly the
+tuning-without-usage-data that Section 13.4 forbids and that this stage
+explicitly refused. The right time is the first real tuning pass. Suggested
+starting point for that pass: test a family of return-to-topic bridges
+("going back to", "anyway", "as I was saying", "back to the course") against
+detour histories, and treat the tool description's own exception clause as
+the spec being violated.
 
 ## BLOCKING: production Google sign-in is non-functional for everyone
 
@@ -2332,6 +2365,33 @@ from a repeat one, with the repeat brief and BeThe1To-sourced rather than
 a re-run of the full text) lives entirely in the response layer, which is
 the layer that does not exist. It cannot be closed before the wiring work,
 and its test expectation should be revisited at the same time.
+
+## STANDING INSTRUCTION: never change a live course's access mode for testing without asking first
+
+Added 2026-09-06 as a standing rule, not a one-time correction.
+
+**A live course's `access_mode` must not be changed for testing purposes
+without confirming with the project owner first. This holds even when the
+change is brief, and even when the plan is to revert immediately.**
+
+Context: during stage 3's regression verification, MKTG365 was temporarily
+set to `access_mode = 'public'` so two route-level cases could run without a
+session, then reverted immediately and confirmed back to `join_code`. The
+disclosure and the revert were handled correctly, and the reasoning was
+sound, but the decision was still taken unilaterally. Access mode is the
+control that decides who can reach a course at all; relaxing it, however
+briefly, is the owner's call rather than a testing convenience.
+
+Note the shape of the trap: the change is easy to justify in the moment
+precisely *because* it is short-lived, which is what makes an
+ask-first rule necessary rather than a judgement call each time. The same
+reasoning that put `access_mode` behind a `'closed'` default and a database
+trigger applies to changing it by hand.
+
+If a future test genuinely needs a non-session path, ask. Alternatives that
+do not touch a live course include driving the underlying modules directly
+(as `scripts/test-verdict-rule.ts` does) or standing up a separate throwaway
+course.
 
 ## STANDING ITEM: one person currently holds every human role for MKTG365
 
