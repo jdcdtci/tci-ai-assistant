@@ -617,3 +617,108 @@ assumption:
   identity per program: retire Nancy fully, or keep a named persona per
   surface?" The per-program axis is settled; whether each persona carries
   a *name* is explicitly undecided in the spec and is the user's call.
+
+### Stage 1 DONE: persona and voice pass
+
+Both blocking decisions were made by the project owner and are now
+recorded in the system rather than only in conversation:
+
+- **MKTG365 is TCI University Online**, the for-credit business catalog.
+  Stated explicitly by the owner, not inferred from the course code.
+  Nothing in the codebase, database, or spec recorded this before; the
+  course source document header ("La Sierra University / Tom and Vi
+  Zapara School of Business / MKTG 365 Marketing Research") and the
+  spec's definition of TCI University Online as for-credit degree courses
+  licensed to universities corroborate it but did not establish it.
+- **Personas stay unnamed for now**: role-based voice only (ACI warm
+  practitioner, AIE graduate peer, TCI collegial academic), no proper
+  name on any surface. Reason recorded because it is a real safety
+  judgment, not a style preference: a named persona invites more
+  relational trust from a student than an unnamed one, which is a larger
+  commitment to take on while spec 9.1's distress-signal detection is
+  still unbuilt. **Revisit naming after stage 2 closes, not before.**
+
+**What was built.**
+- Migration `20260906024655_add_program_to_courses.sql`: adds
+  `courses.program`, NOT NULL, **no default**, CHECK constrained to
+  `('aci','aie','tci')` matching the lowercase `access_mode` convention
+  on the same table. Backfilled MKTG365 to `'tci'`, with a guard block
+  that raises rather than proceeding if any course row would have been
+  left without a program. No default is deliberate: a defaulted or null
+  program is harmless while this column only drives tone, but becomes
+  dangerous the moment guardrail tier binds to it, since spec 2.4
+  requires a for-credit course to inherit the strictest tier "without
+  anyone remembering to set it."
+- `lib/persona.ts`: the three voices, plus `buildVoiceSection()`, which
+  appends an explicit precedence statement to the prompt ("This section
+  governs tone only... Where anything here appears to conflict with a
+  rule above, that rule governs") and the no-personal-name instruction.
+  An unrecognized or missing program returns no voice section at all and
+  logs a warning, rather than guessing a register.
+- `app/api/chat/route.ts`: the course lookup runs in `Promise.all`
+  alongside retrieval (they are independent), and `buildSystemPrompt`
+  appends the voice block after the engine rules, never woven into them.
+  A failed course lookup logs and degrades to the default voice; persona
+  is cosmetic and must never cost a student an answer.
+
+**Guardrail tier is not touched by this column, confirmed in writing.**
+`program` is read by persona selection and nothing else. No guardrail,
+capability, refusal, academic-integrity, privacy, or access-control code
+reads it, and no tier is bound to it. That statement is also recorded in
+the migration file itself and in the header of `lib/persona.ts`, along
+with the test for future edits to that file: if a line would change the
+assistant's behavior for a student who asked it to do something it should
+not do, it does not belong in the persona layer. Spec 2.3 is the reason
+(a warm tone must never be able to loosen a for-credit integrity rule),
+and binding tier to this same column later is expected, correct, and a
+separate piece of work with its own review.
+
+**Verified.**
+- Column state confirmed live: NOT NULL, no default,
+  `courses_program_check` present, MKTG365 = `tci`.
+- RLS on `courses` re-verified after the migration via `pg_policies`:
+  still enabled, still exactly one `service_role` ALL policy,
+  default-deny for `anon`/`authenticated` intact, pre-existing
+  `access_mode` and escalation CHECK constraints untouched.
+- All three voice sections render correctly; `bogus` and `undefined`
+  both degrade to the default engine voice and log.
+- Real request against the local dev server returned a grounded,
+  correctly-patterned tutoring response in an unmistakably
+  collegial-academic register, with no `[persona]` warning in the logs,
+  confirming the lookup resolved and the TCI voice was actually applied.
+- Unknown-course fallback returns 200 with the warning logged, no crash.
+- `tsc --noEmit` and `eslint` clean apart from pre-existing issues (the
+  `LayoutProps` generated-type error in `app/layout.tsx` and two
+  unused-`err` warnings in catch blocks that predate this work).
+
+**Not verified, and worth being precise about.** The student-facing
+browser UI was NOT exercised end to end for this change. The chat screen
+sits behind Google sign-in, which cannot be completed without entering
+credentials, and the separate real-Chrome surface cannot reach the local
+dev server at all (different network context). What was confirmed in a
+real browser is that the app loads and renders the sign-in screen
+correctly. The UI code was not modified by this stage and the route's
+request/response contract is unchanged, so this is a lower-risk gap than
+the one rule 1 was written for, but it is a gap: a signed-in pass through
+the real chat screen is still worth doing at the start of the next
+session.
+
+**Local testing note.** `SITE_PASSWORD` is set in `.env.local`, so the
+whole-site gate is active locally and blocks automated browser testing.
+Running `SITE_PASSWORD= npm run dev` disables it for that process only
+(the middleware no-ops when the value is empty), touching no file and
+leaving production unaffected. `.claude/launch.json` was temporarily
+changed to do this during testing and has been **restored to its
+original contents**; use the env prefix ad hoc rather than committing it.
+Also note the Upstash credentials (`KV_REST_API_*`) live in
+`.env.development.local`, not `.env.local`, which is why local
+`/api/chat` works despite those names being absent from the latter.
+
+**Not done, deliberately, and flagged so it is not lost.** Spec 3.1's
+"warmth without authority" rule (the assistant must never characterize
+how easy, hard, or fair an upcoming graded assessment will be, since that
+is an unearned claim of authority no different in kind from implying it
+could grant an extension) is **not currently in the system prompt at
+all**. It was left alone here because it is a capability boundary, not
+voice, and stage 1 was scoped to cosmetic changes only. It belongs to
+guardrail work, and it is a real current gap, not a future nicety.

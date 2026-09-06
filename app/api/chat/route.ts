@@ -5,6 +5,7 @@ import { Redis } from "@upstash/redis";
 import { embed } from "@/lib/voyage";
 import { getSupabaseServiceClient } from "@/lib/supabase";
 import { classifyExchange, type Turn } from "@/lib/classify";
+import { buildVoiceSection } from "@/lib/persona";
 
 // Vercel's default function duration (10s) isn't enough headroom for a
 // request that has to queue for Voyage capacity -- a 3-per-60s sliding
@@ -200,9 +201,15 @@ Adapt. If the student's answer to a check was wrong or confused, do not simply r
 
 Formatting rules: never use em dashes anywhere in your response. Never use bold text. Write in plain prose only.`;
 
-function buildSystemPrompt(chunks: { content: string }[]): string {
+// The voice section is appended after the engine rules above, never woven
+// into them: persona is cosmetic (spec 2.3), and keeping it in its own
+// clearly bounded block is what makes that separation auditable in the
+// assembled prompt rather than only in the source files.
+function buildSystemPrompt(chunks: { content: string }[], program: unknown): string {
   const material = chunks.map((c) => c.content).join("\n\n---\n\n");
-  return `${SYSTEM_PROMPT}\n\nCourse material:\n\n${material}`;
+  const voice = buildVoiceSection(program);
+  const voiceSection = voice ? `\n\n${voice}` : "";
+  return `${SYSTEM_PROMPT}${voiceSection}\n\nCourse material:\n\n${material}`;
 }
 
 export async function POST(request: NextRequest) {
@@ -264,11 +271,28 @@ export async function POST(request: NextRequest) {
   }
 
   const supabase = getSupabaseServiceClient();
-  const { data: chunks, error: retrievalError } = await supabase.rpc("match_knowledge_chunks", {
-    query_embedding: queryEmbedding,
-    match_course_id: course_id,
-    match_count: MATCH_COUNT,
-  });
+
+  // Retrieval and the course lookup are independent, so they run together
+  // rather than in sequence. The course row is needed only for its program,
+  // which selects the persona voice.
+  const [
+    { data: chunks, error: retrievalError },
+    { data: course, error: courseError },
+  ] = await Promise.all([
+    supabase.rpc("match_knowledge_chunks", {
+      query_embedding: queryEmbedding,
+      match_course_id: course_id,
+      match_count: MATCH_COUNT,
+    }),
+    supabase.from("courses").select("program").eq("id", course_id).maybeSingle(),
+  ]);
+
+  // Persona is cosmetic, so a failed or missing course lookup must never
+  // cost the student an answer. Fall back to the engine's default voice and
+  // log it; buildVoiceSection degrades to no voice section on its own.
+  if (courseError || !course) {
+    console.warn(`[persona] course lookup failed for ${course_id}; using default voice`);
+  }
 
   if (retrievalError) {
     return NextResponse.json({ error: "Could not retrieve course material right now." }, { status: 500 });
@@ -283,7 +307,7 @@ export async function POST(request: NextRequest) {
   const response = await anthropic.messages.create({
     model: "claude-sonnet-5",
     max_tokens: 2048,
-    system: buildSystemPrompt(chunks),
+    system: buildSystemPrompt(chunks, course?.program),
     messages: [...priorTurns, { role: "user", content: message }],
   });
 
