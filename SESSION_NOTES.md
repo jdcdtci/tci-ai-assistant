@@ -907,6 +907,66 @@ questions).**
   academic frustration that must not fire, and attempts to talk the
   assistant out of responding.
 
+**Enrollment state corrected: MKTG365 now has ZERO enrollments.** The
+single enrollment row was checked directly rather than inferred: it was
+`goalkeeper.dielmann@gmail.com` (the owner's own account), enrolled
+2026-08-30 23:28 UTC, which matches the join-code UI test recorded
+earlier. No real student existed. That row was deleted on instruction and
+both `enrollments` overall and MKTG365 specifically now return 0. If a
+test enrollment is needed again, re-enrolling through the join-code screen
+recreates it; nothing else referenced that row.
+
+**Is there any real path for a student to enroll right now? No, verified
+directly against production rather than assumed.** As of 2026-09-05,
+`https://tci-ai-assistant.vercel.app/` returns **401** on the root and
+**401** on a direct `POST /api/chat`, with
+`www-authenticate: Basic realm="TCI Assistant"`. The whole-site
+`SITE_PASSWORD` gate is live. Enrolling requires clearing three gates in
+order: the site password, then Google sign-in, then the join code
+`A4D3KAWR`. Knowing the join code alone is useless without the site
+password. So the join code is not meaningfully distributed or reachable:
+there is no path by which an outside student can currently enroll or
+chat. The corollary that matters for stage 2's timeline is that no real
+student is exposed today, and the standard remains having distress
+detection done **before** one ever is, not before one currently is.
+
+**Schema defect fixed on its own track (migration
+`20260906034705_derive_escalation_enabled_from_recipient.sql`).**
+`escalation_enabled` is no longer an independently settable flag. It is
+now `GENERATED ALWAYS AS (escalation_recipient_email is not null) STORED`.
+The previous design was a boolean plus a CHECK asserting the flag could
+not be true without a recipient, which only constrained one direction: a
+course could hold a real recipient and still read as disabled, which is
+precisely the state MKTG365 was in. Two fields expressing one fact could
+disagree about whether a student in distress had anywhere to go. Now they
+cannot. The old CHECK was dropped because its condition became a theorem
+about the generation expression rather than a constraint that could fail.
+Escalation is turned on by setting `escalation_recipient_email` and off by
+nulling it; there is no other write path, deliberately, and direct
+database entry remains the expected mechanism until the dashboard exists.
+
+Verified three ways: a direct `UPDATE` to `escalation_enabled` is
+rejected by Postgres with `generated_always`; `information_schema` reports
+`is_generated = ALWAYS` with expression `(escalation_recipient_email IS
+NOT NULL)` and `is_nullable = NO`, inspected on the deployed table rather
+than trusted from the migration text; and `pg_constraint` confirms the old
+escalation CHECK is gone while `courses_access_mode_check` and
+`courses_program_check` remain intact. MKTG365 currently reads recipient
+`null`, enabled `false`, which is now a single consistent fact.
+
+One honest limitation recorded in the migration itself: deriving
+enablement from the *presence* of a recipient treats "an operator
+deliberately entered this address" as equivalent to "a real person agreed
+to receive escalations." That holds while the only write path is direct
+database entry by the operator. It stops holding the moment a form lets
+someone else type an address, at which point 12.2a's "only if a real
+person has agreed" needs its own representation, most likely a
+confirmation timestamp folded into the same generation expression.
+
+**The professor-facing dashboard and portal, including the escalation
+contact entry point, is deferred to a future build and is explicitly not
+scoped or started.**
+
 **BLOCKING: two decisions needed before the student-facing half is
 written.** Both are the project owner's, not build-time judgment calls.
 1. **Who is the designated responsible party for MKTG365?** Same
