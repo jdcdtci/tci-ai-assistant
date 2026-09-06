@@ -812,6 +812,70 @@ Everything else in stage 1 and the guardrail patch is verified. Stage 2
 (distress-signal detection) has NOT been started, because stage 1 was
 gated on this UI test.
 
+### Captured feature request: assessment-scope clarifying sequence (NOT scheduled)
+
+Requested 2026-09-05: after a student asks about a quiz, test, or
+assignment, the assistant should (1) ask which one is coming up, (2) ask
+whether there is a specific area they are worried about, then (3) list
+the topic areas for that assessment. Recorded here with the research
+done, so the design work is not repeated. **Not built, not scheduled.**
+
+**Feasibility: better than expected. The material exists and is legally
+retrievable.** The obvious worry was that "list what is on the quiz"
+collides with the `answer_bearing` guardrail. It does not, and the
+distinction matters: `answer_bearing` tags graded assignment *prompts*
+(21 chunks, e.g. "Activity 4-2: Survey Instrument Design. Design a
+15-question survey..."), which is the leak that once had the assistant
+performing an assignment live. Published *scope statements* are a
+different class of content. MKTG365 contains at least seven
+"ASSESSMENT CONTENT / TOPICS COVERED" blocks, all `answer_bearing =
+false` and therefore already retrievable, listing topics per unit
+(secondary research; survey instruments; observational research;
+experimental research; multivariate analysis; digital analytics; and
+more). So step 3 is groundable without weakening any guardrail.
+
+**The real engineering problem: retrieval is not guaranteed to land on
+the right block.** Retrieval embeds the student's message. "Quiz 3"
+carries almost no semantic signal toward a block whose text is "internal
+secondary data: sales records, CRM data, and transaction databases," so
+the likely failure is that retrieval returns ordinary course content, the
+model has plausible-looking material in context, and improvises a topic
+list. That is an ungrounded factual claim about a graded assessment, and
+it is worse than the difficulty-characterization gap just patched:
+specific, actionable, and a student will study from it. Any build needs a
+**targeted lookup of the assessment-scope blocks rather than
+embedding-luck**, plus an explicit refusal path when the block for the
+named assessment is not found. A prompt-only change cannot do this.
+
+**No concept of "upcoming" exists.** There is no assessments table, no
+dates, no schedule, and no notion of where a student is in the course
+(tables are only `courses`, `enrollments`, `knowledge_chunks`,
+`knowledge_documents`, `student_interaction_history`). Asking the student
+which assessment is coming up is a sound compensation for that, but the
+assistant cannot validate the answer, cannot know whether a named
+assessment exists, and the scope blocks do not appear to carry
+student-facing assessment names to match against.
+
+**Why it should wait for stage 2, on the project's own gating logic.**
+Step 2 of the sequence literally asks the student what they are *worried*
+about, which deliberately steers conversations toward expressions of
+worry and anxiety. That is the exact signal class spec 9.1's
+distress-signal detection exists to catch, and it is unbuilt. The
+standing rule is that stage 2 gates stages 3 and 4 because both increase
+how much and how proactively the tutor talks to students; a feature whose
+design intent is to elicit statements of worry increases exposure in
+precisely that way. Separately, stage 3 was scoped to only the three
+evidence-diagnosed defects with the rest of Section 13 frozen per the
+spec's instruction not to tune ahead of real usage data, and this is new
+tutoring behavior rather than one of those three.
+
+**Design notes for when it is built.** Do not force two questions before
+any help: a student anxious about an assessment who is interrogated twice
+before receiving substance is a plausible disengagement path, and the
+existing pattern deliberately avoids forced checks. Skip straight to the
+scope listing when the student has already named the assessment, and ask
+the clarifying question only when the answer would actually change.
+
 **Local testing note (repeat, because it will come up every time).**
 `SITE_PASSWORD` is set in `.env.local`, so the whole-site gate is active
 locally and blocks automated browser testing. The `SITE_PASSWORD= `
