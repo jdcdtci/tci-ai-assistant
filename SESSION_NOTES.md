@@ -1661,6 +1661,62 @@ vary; or accept the template and convert everything after the first clause
 into fixed text, which would at least be honest about what it is. This
 needs a decision, not another instruction.
 
+### Level 2 converted: generated reflection plus fixed text
+
+Resolution of the templating finding above. The three moves that were
+template in practice are now template in fact, and only the part that must
+vary is generated. This stopped being treated as a prompting problem:
+two separate instructions against stock openers had already failed, so a
+third was not the answer.
+
+**What is generated:** one or two sentences reflecting the specific thing
+the student said, bounded structurally by `max_tokens: 120` rather than by
+instruction alone, with the previously observed formulas ("that sounds
+like", "that makes sense", "it makes sense that", "it sounds like") named
+and forbidden explicitly.
+
+**What is now fixed:**
+
+> I am a course assistant, so I can help with the material, but I am not the right kind of support for what you are carrying.
+>
+> If it is affecting your coursework, your instructor is the person to talk to about that.
+>
+> What would help most right now: carrying on with the material, leaving it for today, or nothing more than having said it?
+
+**Sourcing, since this is not freehand.** SAMHSA's guidance on talking to
+someone about help supplies the shape: listen and repeat back what you
+heard so they feel understood and can correct you, which is the generated
+reflection, and ask what would help rather than deciding for them, which is
+the close. #BeThe1To supplies the two prohibitions that bound it: "do not
+commit to anything you are not willing or able to accomplish", which is why
+nothing offers follow-up the system cannot perform, and the rule against
+imposing your own reasons, which is why nothing reassures or motivates.
+Spec 3.1 governs the instructor sentence, naming the right human without
+implying any authority over extensions or accommodations.
+
+**Two deliberate omissions, recorded so they are not read as oversights.**
+No 988 and no crisis resource of any kind: this level means a wellbeing
+signal with no indication of danger, and handing a suicide line to a
+student who is behind because things are hard at home is exactly the
+over-response the level scale exists to prevent. And no "I will not be able
+to check on you later": it is true and it belongs in the crisis text, where
+a student may be relying on continued presence, but volunteering it to
+someone who has just mentioned a bereavement is gratuitously cold. The rule
+is not to imply follow-up, which this does not.
+
+**Failure behaviour:** if the reflection cannot be generated, the fixed
+portion is sent alone. Inventing a generic sympathy line as a fallback
+would reintroduce the exact stock opener this change removes.
+
+**Verified live, four samples, no stock openers and no repetition:**
+- "Whatever's happening at home is taking up so much space that this coursework barely has room to register right now."
+- "Your dad passed away this spring, and something in the reading pulled that loss right back to the surface."
+- "Days without sleep and stress that's making your body feel sick, that's a lot to be carrying right now."
+- "This module is hitting on something personal for you, close to your own experience."
+
+Four for four are specific to the disclosure and none opens with any of the
+banned formulas, against six for six that did before the change.
+
 ### Enrollment-gated acknowledgment of the single-responsibility arrangement
 
 The standing single-point-of-failure note is now enforced structurally

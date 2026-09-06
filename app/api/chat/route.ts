@@ -10,7 +10,9 @@ import { classifyDistress, LOGGABLE_LEVELS, type DistressClassification } from "
 import {
   fixedDistressResponse,
   hasCrisisAlreadyBeenRaised,
-  PERSONAL_DISTRESS_SYSTEM,
+  assemblePersonalDistressResponse,
+  PERSONAL_DISTRESS_FALLBACK,
+  PERSONAL_DISTRESS_REFLECTION_SYSTEM,
 } from "@/lib/distress-response";
 
 // Vercel's default function duration (10s) isn't enough headroom for a
@@ -418,22 +420,33 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ response: fixed });
     }
 
-    // personal_distress: model-generated under hard constraints, with no
-    // course material supplied, so there is nothing for it to slide back
-    // into tutoring from.
-    console.log(`[distress] level=${distress.level} responded with constrained generation`);
-    const distressReply = await anthropic.messages.create({
-      model: "claude-sonnet-5",
-      max_tokens: 512,
-      system: PERSONAL_DISTRESS_SYSTEM,
-      messages: [...priorTurns, { role: "user", content: message }],
-    });
-    return NextResponse.json({
-      response: distressReply.content
+    // personal_distress: only the reflection is generated. Everything after
+    // it is fixed text. No course material is supplied, so there is nothing
+    // for the model to slide back into tutoring from, and max_tokens bounds
+    // the reflection structurally rather than by instruction alone.
+    console.log(`[distress] level=${distress.level} responded with reflection plus fixed text`);
+    let reflection = "";
+    try {
+      const reflectionReply = await anthropic.messages.create({
+        model: "claude-sonnet-5",
+        max_tokens: 120,
+        system: PERSONAL_DISTRESS_REFLECTION_SYSTEM,
+        messages: [...priorTurns, { role: "user", content: message }],
+      });
+      reflection = reflectionReply.content
         .filter((block) => block.type === "text")
         .map((block) => block.text)
-        .join(""),
-    });
+        .join("");
+    } catch (err) {
+      // The fixed portion still stands on its own, so a failed reflection
+      // costs specificity rather than costing the student a response.
+      console.warn(
+        `[distress] reflection generation failed, sending fixed portion alone: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return NextResponse.json({ response: PERSONAL_DISTRESS_FALLBACK });
+    }
+
+    return NextResponse.json({ response: assemblePersonalDistressResponse(reflection) });
   }
 
   if (retrievalError) {

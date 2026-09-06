@@ -130,29 +130,79 @@ export function hasCrisisAlreadyBeenRaised(
   );
 }
 
-// personal_distress is the one level answered by the model rather than by a
-// fixed string, because a canned reply to a specific personal disclosure is
-// worse than a warm specific one. The constraints below are what keep it
-// from drifting into counselling, advice, or business-as-usual tutoring.
+// personal_distress: ONE generated clause, then fixed text.
 //
-// No course material is supplied with this prompt. That is deliberate: the
-// assistant is not tutoring on this turn, and giving it retrieved content
-// invites it to slide back into explaining.
-export const PERSONAL_DISTRESS_SYSTEM = `A student has said something that indicates a genuine wellbeing concern in their own life, with no indication of danger. Respond to the person, not to the coursework.
+// WHY THIS IS SPLIT RATHER THAN FULLY GENERATED
+//
+// This level was originally generated end to end, on the argument that a
+// canned reply to a specific personal disclosure is worse than a warm
+// specific one. Six live samples showed that argument only holds for the
+// first clause. All six opened with a demonstrative plus a reflection verb
+// ("that sounds like" four times, "makes sense" twice, one of them the exact
+// phrase already flagged elsewhere in this project), and three of the four
+// moves were near-identical across all six: the limitation sentence, the
+// instructor routing, and the three-option close. Only the reflection
+// genuinely varied.
+//
+// The prompt already forbade stock openers, and so does the tutoring prompt.
+// Two instructions did not prevent it. So this stopped being treated as a
+// prompting problem: the parts that are in practice fixed are now actually
+// fixed, and only the part that must vary is generated. That is honest about
+// what the response is, costs less, and cannot drift.
+//
+// SOURCING (the fixed portion is not freehand)
+//
+// SAMHSA's guidance on talking to someone about help supplies the shape:
+// listen and repeat back what you heard "so they feel understood and
+// [to correct] any misunderstandings" (the generated reflection), and
+// ask what would help rather than deciding for them (the close).
+// #BeThe1To supplies the two prohibitions that bound it: "do not commit to
+// anything you are not willing or able to accomplish", which is why nothing
+// here offers follow-up the system cannot perform, and the rule against
+// imposing your own reasons on someone, which is why nothing here reassures
+// or motivates. Spec 3.1 governs the instructor sentence: it names the right
+// human without implying any authority over extensions or accommodations.
+//
+// DELIBERATE OMISSION: no 988, and no crisis resource of any kind. This
+// level means a wellbeing signal with NO indication of danger. Handing a
+// suicide line to a student who said they are behind because things are hard
+// at home is exactly the over-response the level scale exists to prevent,
+// and it is what teaches students to disregard the response when it matters.
+//
+// DELIBERATE OMISSION: no "I will not be able to check on you later". It is
+// true, and it is in the crisis text where a student may actually be relying
+// on continued presence. Volunteering it to someone who has just mentioned a
+// bereavement is gratuitously cold. The rule is not to imply follow-up, which
+// this does not.
+export const PERSONAL_DISTRESS_FIXED = `I am a course assistant, so I can help with the material, but I am not the right kind of support for what you are carrying.
 
-Do all of these:
-Open by reflecting the specific thing they actually said, in one or two sentences, in your own words. Never use a stock opener or a generic sympathy phrase.
-Make clear, briefly and without drama, that you are a course assistant and not the right kind of support for what they are carrying.
-Point to a real human route: their instructor is the person to talk to about anything affecting their coursework, such as deadlines or workload.
-Hand control back to them by asking what would actually help right now, and name the options plainly: carrying on with the material, leaving it for now, or just having said it.
+If it is affecting your coursework, your instructor is the person to talk to about that.
 
-Do none of these:
-Do not diagnose, interpret, or explain what they are feeling.
-Do not give advice about their personal situation, and do not offer coping strategies.
-Do not teach, explain course content, or ask any comprehension check on this turn. There is no tutoring in this response at all.
-Do not claim you have told anyone or will tell anyone. You have not and cannot.
-Do not promise to follow up, check in later, or remember this. You cannot do any of those things.
-Do not promise confidentiality.
-Do not offer to grant or arrange an extension, an accommodation, or any other exception. You have no authority to do that and saying otherwise is a false promise.
+What would help most right now: carrying on with the material, leaving it for today, or nothing more than having said it?`;
 
-Keep it short. Four sentences or so. Never use em dashes and never use bold text.`;
+// Used when the reflection cannot be generated. Sending the fixed portion
+// alone is honest and safe; inventing a generic sympathy line as a fallback
+// would reintroduce exactly the stock opener this change removes.
+export const PERSONAL_DISTRESS_FALLBACK = PERSONAL_DISTRESS_FIXED;
+
+// The generated part is now scoped to the reflection only. max_tokens is kept
+// low at the call site as a structural bound, not just an instruction.
+export const PERSONAL_DISTRESS_REFLECTION_SYSTEM = `A student has said something indicating a genuine wellbeing concern in their own life. Your entire job is to write ONE or TWO sentences reflecting back the specific thing they actually said, so they can tell they were heard and can correct you if you have it wrong.
+
+Write only that reflection. Something else already follows it, so do not write anything beyond it.
+
+Reflect what is specific to them: the actual circumstance, in your own words. Do not open with a stock formula such as "that sounds like", "that makes sense", "it makes sense that", or "it sounds like". Vary how you begin.
+
+Do not diagnose, interpret, or name what they must be feeling.
+Do not give advice, offer coping strategies, or reassure them that things will improve.
+Do not teach, explain course content, or ask any question.
+Do not mention yourself, your limitations, their instructor, or what happens next.
+Do not promise anything, including confidentiality, follow-up, or that anyone has been told.
+
+Never use em dashes and never use bold text.`;
+
+export function assemblePersonalDistressResponse(reflection: string): string {
+  const trimmed = reflection.trim();
+  if (!trimmed) return PERSONAL_DISTRESS_FALLBACK;
+  return `${trimmed}\n\n${PERSONAL_DISTRESS_FIXED}`;
+}
