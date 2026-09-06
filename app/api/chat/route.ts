@@ -6,6 +6,12 @@ import { embed } from "@/lib/voyage";
 import { getSupabaseServiceClient } from "@/lib/supabase";
 import { classifyExchange, type Turn } from "@/lib/classify";
 import { buildVoiceSection } from "@/lib/persona";
+import { classifyDistress, LOGGABLE_LEVELS, type DistressClassification } from "@/lib/distress";
+import {
+  fixedDistressResponse,
+  hasCrisisAlreadyBeenRaised,
+  PERSONAL_DISTRESS_SYSTEM,
+} from "@/lib/distress-response";
 
 // Vercel's default function duration (10s) isn't enough headroom for a
 // request that has to queue for Voyage capacity -- a 3-per-60s sliding
@@ -203,6 +209,82 @@ Adapt. If the student's answer to a check was wrong or confused, do not simply r
 
 Formatting rules: never use em dashes anywhere in your response. Never use bold text. Write in plain prose only.`;
 
+// Writes the distress event and decides, at write time, whether it crossed a
+// notification threshold. Computed here rather than by each reader so the
+// review tool and any future delivery channel agree by construction instead
+// of reimplementing the same rule twice.
+//
+// Awaited rather than deferred to after(): this is the record that a human
+// follow-up depends on, and it costs one fast insert on a rare turn. It must
+// never throw its way into the student's response, though, so failures are
+// logged and swallowed. A student in distress receiving an error because the
+// logging failed would be the worst possible ordering of priorities.
+const PATTERN_LEVELS = ["possible_risk", "crisis"];
+const PATTERN_COUNT = 3;
+const PATTERN_WINDOW_DAYS = 7;
+
+async function recordDistressEvent(
+  supabase: ReturnType<typeof getSupabaseServiceClient>,
+  args: {
+    course_id: string;
+    student_id: string | null;
+    message: string;
+    classification: DistressClassification;
+  },
+) {
+  const { course_id, student_id, message, classification } = args;
+
+  let notification_worthy = false;
+  let notification_reason: string | null = null;
+
+  try {
+    if (classification.interpersonal_harm) {
+      // Bypasses the pattern requirement entirely: the obligation to know
+      // about a disclosure of interpersonal harm arises on the first
+      // occurrence, not the third.
+      notification_worthy = true;
+      notification_reason = "interpersonal_harm";
+    } else if (student_id && PATTERN_LEVELS.includes(classification.level)) {
+      // Pattern needs identity. Anonymous sessions cannot be linked across
+      // events, so for them this can never fire and the in-conversation
+      // response is the entire intervention.
+      const since = new Date(Date.now() - PATTERN_WINDOW_DAYS * 86_400_000).toISOString();
+      const { count } = await supabase
+        .from("distress_events")
+        .select("id", { count: "exact", head: true })
+        .eq("student_id", student_id)
+        .eq("course_id", course_id)
+        .in("level", PATTERN_LEVELS)
+        .gte("created_at", since);
+
+      if ((count ?? 0) >= PATTERN_COUNT - 1) {
+        notification_worthy = true;
+        notification_reason = "pattern";
+      }
+    }
+
+    const { error } = await supabase.from("distress_events").insert({
+      course_id,
+      student_id,
+      level: classification.level,
+      message,
+      interpersonal_harm: classification.interpersonal_harm,
+      notification_worthy,
+      notification_reason,
+    });
+
+    if (error) throw new Error(error.message);
+
+    console.log(
+      `[distress] logged level=${classification.level} harm=${classification.interpersonal_harm} notify=${notification_reason ?? "no"}`,
+    );
+  } catch (err) {
+    console.error(
+      `[distress] FAILED TO LOG a ${classification.level} event: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 // The voice section is appended after the engine rules above, never woven
 // into them: persona is cosmetic (spec 2.3), and keeping it in its own
 // clearly bounded block is what makes that separation auditable in the
@@ -241,6 +323,15 @@ export async function POST(request: NextRequest) {
   }
 
   const priorTurns: Turn[] = Array.isArray(history) ? history.slice(-MAX_HISTORY_TURNS) : [];
+
+  // Started immediately and awaited only once a response is about to be
+  // produced, so distress detection costs no added latency on the ordinary
+  // path. It genuinely must be able to REPLACE the response, unlike
+  // classifyExchange which runs in after() precisely because it cannot
+  // affect what the student sees. Retrieval still runs underneath and is
+  // simply discarded when distress fires: wasting an embedding on a rare
+  // turn is a better trade than adding a serial model call to every turn.
+  const distressPromise = classifyDistress(anthropic, priorTurns, message);
 
   let retrievalQuery = message;
   if (priorTurns.length > 0) {
@@ -286,7 +377,11 @@ export async function POST(request: NextRequest) {
       match_course_id: course_id,
       match_count: MATCH_COUNT,
     }),
-    supabase.from("courses").select("program").eq("id", course_id).maybeSingle(),
+    supabase
+      .from("courses")
+      .select("program, institutional_crisis_resource")
+      .eq("id", course_id)
+      .maybeSingle(),
   ]);
 
   // Persona is cosmetic, so a failed or missing course lookup must never
@@ -294,6 +389,51 @@ export async function POST(request: NextRequest) {
   // log it; buildVoiceSection degrades to no voice section on its own.
   if (courseError || !course) {
     console.warn(`[persona] course lookup failed for ${course_id}; using default voice`);
+  }
+
+  // Distress handling is resolved BEFORE the retrieval-failure and
+  // empty-material branches below, deliberately. Those branches return
+  // "I don't know" or a 500, and a student in crisis whose message happened
+  // to retrieve nothing would otherwise receive one of those instead of a
+  // crisis response. Distress outranks every retrieval outcome.
+  const distress = await distressPromise;
+
+  if (distress && distress.level !== "none" && distress.level !== "academic_frustration") {
+    if (LOGGABLE_LEVELS.includes(distress.level)) {
+      await recordDistressEvent(supabase, {
+        course_id,
+        student_id: typeof student_id === "string" ? student_id : null,
+        message,
+        classification: distress,
+      });
+    }
+
+    const fixed = fixedDistressResponse(distress.level, {
+      crisisAlreadyRaised: hasCrisisAlreadyBeenRaised(priorTurns),
+      institutionalResource: course?.institutional_crisis_resource,
+    });
+
+    if (fixed) {
+      console.log(`[distress] level=${distress.level} responded with fixed text`);
+      return NextResponse.json({ response: fixed });
+    }
+
+    // personal_distress: model-generated under hard constraints, with no
+    // course material supplied, so there is nothing for it to slide back
+    // into tutoring from.
+    console.log(`[distress] level=${distress.level} responded with constrained generation`);
+    const distressReply = await anthropic.messages.create({
+      model: "claude-sonnet-5",
+      max_tokens: 512,
+      system: PERSONAL_DISTRESS_SYSTEM,
+      messages: [...priorTurns, { role: "user", content: message }],
+    });
+    return NextResponse.json({
+      response: distressReply.content
+        .filter((block) => block.type === "text")
+        .map((block) => block.text)
+        .join(""),
+    });
   }
 
   if (retrievalError) {

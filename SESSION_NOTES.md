@@ -1546,7 +1546,84 @@ yet. Both sets held. That is a mixed-history result and should stay
 described as one; 17/17 is the correct coverage count, not evidence that
 all 17 carry equal weight.
 
-## STANDING ITEM: stage 2 detects nothing in the live product
+## Stage 2 IS NOW WIRED into the live chat path (2026-09-06)
+
+Supersedes the standing item below, which is kept because its account of
+what "built but not wired" looked like is worth not losing.
+
+`classifyDistress` now runs on every `/api/chat` exchange, and the level 2,
+3, and 4 responses exist in code (`lib/distress-response.ts`) rather than
+only as drafts in this file.
+
+**Where it sits in the request.** The classifier is started immediately on
+receiving the message and awaited only once a response is about to be
+produced, so it adds **no latency on the ordinary path**. Retrieval and
+embedding still run underneath and are discarded when distress fires:
+wasting an embedding on a rare turn is a better trade than adding a serial
+model call to every turn.
+
+**Ordering that matters:** the distress branch resolves **before** the
+retrieval-failure and empty-material branches. Those return a 500 or "I
+don't know", and a student in crisis whose message happened to retrieve
+nothing would otherwise have received one of those instead of a crisis
+response. Distress outranks every retrieval outcome.
+
+**Responses.** `possible_risk` and `crisis` return fixed text and the
+tutoring model is not asked to generate at all, on the same
+starve-rather-than-discipline principle 3.8 uses for assessment mode: a
+fixed string cannot drift, cannot be argued out of, and cannot be
+prompt-injected. `personal_distress` is model-generated under hard
+constraints **with no course material supplied**, so there is nothing for
+it to slide back into tutoring from. All three texts are mapped, in
+comments in the file, against the #BeThe1To steps the assistant can and
+cannot perform.
+
+**Verified end to end against the live route, all eight paths:**
+
+| Path | Result |
+|---|---|
+| Ordinary question | tutors normally, unchanged |
+| Academic frustration | tutors normally, does not fire |
+| Academic harassment-research question | tutors normally, does not fire |
+| `personal_distress` | constrained reply: reflected the specific disclosure, named its own limits, pointed to the instructor, offered the three options, no tutoring, no comprehension check |
+| `possible_risk` | fixed text, direct ask first, privacy caveat last |
+| `crisis`, first occurrence | full fixed text |
+| `crisis`, repeat after retraction | **brief text, not a re-run of the script** |
+| `interpersonal_harm`, first occurrence | logged, flagged, surfaced by the bypass |
+
+**The retraction case is resolved in behaviour.** It still classifies as
+`crisis`, which is correct and safe, and the student now receives the
+brief acknowledging text rather than the full script again. The suite's
+expectation of `none` for that case is now the thing that is wrong, and
+should be updated to expect `crisis` with a note that correct handling
+lives in the response layer, which it now demonstrably does.
+
+**The pattern threshold fired organically during testing**, unplanned: the
+third qualifying event for one test student was written with
+`notification_worthy = true, notification_reason = 'pattern'`. The
+interpersonal-harm event was logged at `personal_distress`, a level that
+can never reach the pattern rule, and still surfaced via the bypass, which
+is the clearest possible demonstration that the bypass does real work.
+
+**Still true, and unchanged by any of this: there is no delivery channel.**
+`notification_worthy` is a recorded flag and a queue for a future sender.
+Nothing is sent to anyone. Visibility remains bounded by how often
+`npm run distress-log` is actually run.
+
+All test rows deleted afterward; `distress_events` confirmed back to 0,
+enrollments 0, and no interaction-history rows written (the distress
+branches return before the classification path).
+
+**One thing to watch:** the `personal_distress` reply opened with "That
+makes sense, it's hard to focus on coursework when..." The existing note
+about the acknowledgment opener applies here too; if "that makes sense"
+becomes the default scaffold for this level, it needs varying.
+
+## STANDING ITEM (SUPERSEDED 2026-09-06): stage 2 detects nothing in the live product
+
+> Superseded by the section above. Retained because it records exactly what
+> the gap between a tested mechanism and a working safeguard looked like,
+> which is worth being able to recognise again.
 
 The single most important status fact in this file, stated once, plainly,
 because it is easy to lose in the volume of stage 2 detail below.
