@@ -1934,16 +1934,92 @@ chats, section-scoped reads) depends on **none** of the three prerequisites.
 Only professor browse, download, and export are blocked. That half can ship
 independently once sections land.
 
-### Still open, needing a decision before building
+### The four open decisions: RESOLVED 2026-09-06
 
-- Course-level kill switch (disable an entire course across all sections),
-  or is section-level `access_mode` sufficient?
-- Should a student be allowed to enrol in two sections of the same course
-  (retake across terms)? Affects the `(student_email, section_id)`
-  uniqueness story.
-- `institutional_crisis_resource`: section or course? Recommended section,
-  for consistency with the wellbeing reader.
-- Professor identity shape: third column or `section_staff` role table.
+1. **Professor identity: `section_staff` role table**, not a third column.
+   Reworking the generated column and trigger now, at zero enrollments, is a
+   real but bounded one-time cost. A bare email string that is correct by
+   coincidence defeats the point of the single-responsibility check, which
+   needs a queryable fact about who holds which role, not a string never
+   verified to mean what it is assumed to mean.
+2. **No course-level kill switch.** Section-level access control is
+   sufficient, and a course-level override would be a second way for
+   `access_mode` to disagree with itself, the same defect class already
+   closed once this session.
+3. **One active enrollment per course per student.** Simultaneous
+   enrollment in two sections raises exactly the "which one has
+   authoritative interaction history" question already deferred by not
+   carrying memory across retakes.
+4. **`institutional_crisis_resource` sits at section level**, alongside
+   escalation and the wellbeing reader. It is the same category of fact:
+   this specific section's real, current point of contact, not something
+   safely shared across sections with entirely different staff.
+
+### Three consequences of the role table, found while sequencing
+
+**a. `escalation_enabled` cannot remain a generated column, and that turns
+out to be an improvement.** A Postgres generated column may only reference
+columns in its own row, so it cannot derive from `section_staff`. The
+replacement is to **drop the stored flag entirely** and express the fact as
+a function or view over `section_staff`. That is strictly stronger than the
+generated column: there is no stored value at all, so nothing can disagree
+with the authoritative source, rather than merely being forced to agree.
+
+**b. The solo-responsibility check broadens from two roles to three, and
+needs one confirmation.** Today the ack trigger fires when
+`escalation_recipient_email = distress_log_reader_email`. With professor,
+escalation recipient, and wellbeing reader as three distinct roles, the
+natural rule is: **require the acknowledgment when any single person holds
+two or more of the three roles.** Confirm that is the intent, since it is
+broader than the current rule: it would now also fire when the professor is
+also the escalation recipient but the wellbeing reader is someone else.
+
+**c. `npm run distress-log` will break silently and must move in the same
+pass.** `scripts/review-distress-events.ts` reads
+`courses.distress_log_reader_email` and `distress_events.course_id`. Once
+those move, it either errors or, worse, quietly reports nothing. It is the
+operational half of the reader's daily commitment, so it is not optional
+cleanup: it ships with the restructure or the commitment silently stops
+being servable.
+
+### Build order (confirmed, with one amendment)
+
+The proposed order holds. One amendment, explained below.
+
+1. **Sections + `section_staff`, in one pass**, including: the new tables;
+   moving `access_mode`, join code, dates, and
+   `institutional_crisis_resource`; re-pointing `enrollments`,
+   `distress_events`, `student_interaction_history`, and
+   `memory_write_failures`; `can_access_course` becoming
+   `can_access_section`; both enrollment triggers; replacing the generated
+   `escalation_enabled` with a computed equivalent; the null-`ends_at`
+   warning state; **and updating `review-distress-events.ts`**.
+   `/api/chat` moves to taking `section_id` and deriving `course_id`.
+2. **The retention-clock fix, inside that same migration, not after it.**
+   Concrete reason, not just tidiness: `purge_distress_events` runs daily on
+   a live cron job. If sections land first, there is a window in which the
+   schema supports keying off section close while the function still keys
+   off event age, and the job fires during that window. The fix has to be
+   atomic with the restructure that enables it.
+3. **Student-facing chat history.** Depends on none of the professor
+   prerequisites.
+4. **Professor authentication**, once production Google sign-in is fixed.
+   Reads `section_staff`, so it depends on step 1.
+5. **Storage and `.md` export**, last.
+
+**The amendment, and it matters:** step 3 ships verbatim student transcripts
+while step 5, which is what deletes them, is still two steps away. Between
+those points, raw transcripts would accumulate with **no deletion path at
+all**. So step 3 must ship with an **interim purge that simply deletes raw
+transcripts at section close plus 30 days**, with no export. That is
+*stricter* than the final behaviour, not looser. When step 5 lands, that job
+changes from delete-only to export-then-delete. There is then never a period
+in which verbatim student text accumulates without a clock.
+
+**Testing constraint carried into step 1:** `/api/chat` changing to
+`section_id` is a contract change, so rule 1 requires a UI-level test, and
+production sign-in is broken, so that test can only be run locally until it
+is fixed.
 
 ### Restructure discipline
 
