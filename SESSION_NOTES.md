@@ -1208,8 +1208,75 @@ Required cases:
 - plus the retraction case and ordinary academic frustration cases
   already scoped.
 
-**BLOCKING: two decisions needed before the student-facing half is
-written.** Both are the project owner's, not build-time judgment calls.
+### Stage 2 design decisions CONFIRMED, and the access gate now enforced in the DB
+
+**Resources.** 988 is confirmed as the baseline for **both level 3 and
+level 4**. Level 3 does not wait on an institution-specific contact.
+`courses.institutional_crisis_resource` was added (nullable) to carry a
+real La Sierra counseling contact when the instructor conversation
+produces one, following the same populate-later pattern as the escalation
+recipient. Null is a working state, not a gap: the 988 baseline is a
+complete and safe response on its own. Never populate it with a guessed or
+unverified number.
+
+**Secrecy caveat: CONFIRMED as proposed, no longer open.** Brief, and
+placed after the direct ask and the human-connection content rather than
+leading. The evidence resolves the tension rather than leaving it a
+judgment call: a privacy disclaimer placed *before* the direct ask risks
+chilling the exact disclosure the direct ask is designed to invite. So
+placement is not stylistic, it follows from the same evidence base that
+makes the direct ask correct.
+
+**Access gating is now a technical check, not a policy anyone has to
+remember** (migration `20260906040732_gate_access_on_distress_log_reader.sql`).
+- `courses.distress_log_reader_email` and
+  `courses.distress_log_review_interval_hours` record who committed and
+  how often, constrained both-or-neither so a half-populated commitment
+  cannot exist, and interval must be positive.
+- `access_mode` gains a real `'closed'` value meaning no student access,
+  and **`'closed'` is now the column default.** This deliberately reverses
+  the original reasoning for defaulting to `'public'` (a permissive
+  default requiring no explicit choice, convenient for internal testing).
+  That reasoning held when the only cost of a thoughtlessly created course
+  was an open test course; it does not hold once admitting students
+  implies a standing human obligation to watch for distress. Safe and
+  convenient point in opposite directions here, and safe wins.
+- `courses_access_requires_distress_reader` enforces that a course may be
+  anything other than `'closed'` only when both commitment fields are set.
+- A **BEFORE INSERT trigger on `enrollments`** rejects enrollment into a
+  closed course. This is on the enrollments table rather than in
+  `/api/enroll` because **no application code reads `access_mode` at all**
+  (verified: the only occurrence in TypeScript is a comment in
+  `middleware.ts`), so a route-level check would be both new and
+  forgettable, while a trigger holds for every call site now and later.
+
+**The named human is recorded, not left abstract.** MKTG365 now carries
+`distress_log_reader_email = goalkeeper.dielmann@gmail.com` and
+`distress_log_review_interval_hours = 24`: the project owner, committed to
+a daily check, effective 2026-09-05. The course keeps
+`access_mode = 'join_code'` because that commitment now exists; without it
+the constraint would have forced it closed.
+
+**Verified behaviorally, not just structurally.** Two live tests, both
+passing, with cleanup confirmed afterward (1 course, 0 enrollments, reader
+intact): an open course was refused permission to drop its committed
+reader (`check_violation`), and a purpose-created closed course refused an
+enrollment insert at the trigger. Constraint definitions were also read
+back from `pg_constraint` on the deployed table rather than trusted from
+the migration text.
+
+**Known rough edge, deliberately not smoothed.** `/api/enroll` does not
+special-case the closed-course failure, so such an attempt surfaces its
+generic "Could not create your enrollment right now" message. The safety
+property holds because it fails closed; improving the message is an API
+contract change requiring a signed-in UI test under the standing rule, so
+it is logged rather than bundled in here.
+
+**BLOCKING: one decision remains before the student-facing half is
+written.** The MKTG365 escalation recipient, which is the same instructor
+conversation already planned. The distress-log reader question is now
+answered and enforced; the crisis resource question is answered by the 988
+baseline with an institution-specific field ready to layer in later.
 1. **Who is the designated responsible party for MKTG365?** Same
    instructor conversation already planned for the topic-listing feature.
    Until someone has actually agreed, escalation stays disabled and the
