@@ -782,7 +782,16 @@ contents:
   student offers.
 **Result: no proper name exists in any of the three voices.**
 
-### Stage 1 is NOT fully closed: the signed-in UI test is blocked on the owner
+### Stage 1: CLOSED
+
+The signed-in browser UI test passed (run by the project owner on
+2026-09-05, after the automated attempt was blocked). Stage 1 and the
+warmth-without-authority patch are both complete and verified. The
+account of why the automated attempt could not proceed is kept below,
+because the same obstacle will recur every time a signed-in UI test is
+needed.
+
+### Why the automated signed-in UI test could not be run here
 
 Attempted this session and genuinely blocked, not skipped. The chat
 screen requires a Google sign-in. In the automated browser, clicking
@@ -808,9 +817,94 @@ lookup did not break the real interface). Second, "Is the upcoming quiz
 hard?", confirming the new authority guardrail holds in the UI exactly
 as it did against the API.
 
-Everything else in stage 1 and the guardrail patch is verified. Stage 2
-(distress-signal detection) has NOT been started, because stage 1 was
-gated on this UI test.
+Stage 2 (distress-signal detection) has NOT been started. Stage 1 is now
+closed and the assessment-scope leak above is fixed, so stage 2 is the
+next thing to begin.
+
+### Assessment scope leak: CLOSED (separate from the blocked feature below)
+
+A standing, present-tense guardrail gap on a live for-credit course, found
+while assessing the topic-listing feature request but fixed on its own
+track, independent of that request and of the instructor's answer on it.
+
+**The hazard, reproduced live before the fix.** MKTG365's course document
+contains "ASSESSMENT CONTENT / TOPICS COVERED" blocks enumerating exactly
+what a graded assessment covers, and they were ordinary retrievable
+content. Asking "What topics are covered on the upcoming assessment about
+experimental research and test markets?" returned the complete itemized
+list, transcribed from the block: internal validity threats named
+individually, design types, test market coverage, and the rest. It
+complied readily. Because the Section 3.8 assessment-mode flag does not
+exist, nothing distinguished a student revising a week early from one
+sitting inside the quiz, so the same request served scope mid-assessment.
+
+**The fix.** Migration
+`20260906033122_exclude_assessment_scope_from_match.sql` adds
+`knowledge_chunks.assessment_scope` and adds
+`and kc.assessment_scope = false` to `match_knowledge_chunks`. Data layer,
+checked at query time, not a system-prompt instruction telling the model
+to avoid the content, following the same reasoning as `answer_bearing`
+and RLS: the guarantee holds regardless of which future code path queries
+chunks, and does not depend on a model holding an instruction against a
+persistent student.
+
+**Kept separate from `answer_bearing` on purpose.** `answer_bearing` tags
+graded assignment *prompts*; a scope listing reveals what an assessment
+covers, not how to answer it. Separate flags preserve the ability to ask
+which chunks were withheld for which reason. Counts after the migration:
+212 plain, 21 answer_bearing, 7 assessment_scope, 240 total.
+
+**No opt-in parameter was added**, deliberately. Adding one would be
+building toward the blocked feature below ahead of both its open answers.
+
+**The finding that changed the implementation.** Sixteen chunks contain
+one of the markers, but only **seven** are scope blocks. The other
+**nine** are ordinary teaching content that merely ENDS with a trailing
+section header, because the ingest chunker split the header from the
+section it introduces (one closes a passage on screening problematic
+survey respondents, then ends with the bare words "ASSESSMENT CONTENT",
+with the topics starting the next chunk). A naive
+`content like '%TOPICS COVERED%'` match would have withheld nine chunks of
+legitimate course material and degraded real teaching. The criterion used
+is that the chunk *begins* with a marker, and the migration raises rather
+than proceeding if that no longer yields exactly seven.
+
+**Verified, not assumed, four ways.**
+1. `pg_get_functiondef` inspected directly: the deployed function body
+   contains `and kc.assessment_scope = false`. Confirmed live rather than
+   inferred from the migration text, the same discipline used for
+   `pg_policies`.
+2. Maximum-pressure exclusion test: queried `match_knowledge_chunks` using
+   a flagged scope block's **own embedding**, which guarantees similarity
+   1.0 and top rank if it were retrievable at all. It did not appear; the
+   top hit was ordinary lesson content at 0.857.
+3. Over-exclusion counter-test: the same self-embedding method on one of
+   the nine trailing-header teaching chunks returned it at similarity
+   1.000, proving the preserved chunks are still retrievable.
+4. End to end through the API: the identical hazard probe now answers that
+   it has no information about what is on any assessment, correctly
+   composes with the warmth-without-authority guardrail by directing the
+   student to their instructor, and offers to work through the substance.
+   Regression confirmed teaching is undamaged: "Can you explain what
+   internal validity threats are in experimental research?" still returns
+   a full grounded explanation of exactly the topics whose scope block is
+   now withheld.
+
+**Legitimate-use-case check, as required before implementing.** No working
+use case is broken. All substantive teaching content on every listed topic
+remains retrievable (verification 4 demonstrates this on the specific
+topic area affected). What is removed is only the compact enumeration of
+an assessment's scope, which is the hazard itself. Note the one real
+behavior change: the assistant can no longer tell a student what topic
+areas a unit's assessment covers, even outside any assessment context.
+That is intended, and it is also precisely the capability the blocked
+feature request below would need to reinstate deliberately, with the
+system-reported identity problem solved first.
+
+**Re-ingest warning.** Like `answer_bearing`, this tagging is not
+automatic. If MKTG365 content is re-ingested, both tags must be reapplied.
+The migration's guard block fails loudly if the criterion stops matching
+seven chunks.
 
 ### Captured feature request: assessment-scope clarifying sequence (BLOCKED, do not build)
 
