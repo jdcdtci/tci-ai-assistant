@@ -441,15 +441,18 @@ count, role, command) rather than assumed.
    launch context (roles, context, custom claims) tied to an identifiable
    student and is FERPA-relevant under Tier 3, so it has to be classified
    as one or the other before it holds real student data. Not decided.
-4. **Two claims asserted in the plan are unverified and must be verified
-   before anything relies on them:**
-   - that memory / interaction-history writes in `/api/chat` are already
-     conditional on a non-null `student_id` (this is the entire basis for
-     the claim that anonymous public-course chat "simply accrues no
-     history");
-   - that **`pg_cron` is available and enabled on this Supabase project**
-     for the scheduled `lti_nonces` sweep. If it is not, the sweep needs
-     a different mechanism and the nonce-table design changes with it.
+4. ~~**Two claims asserted in the plan are unverified.**~~ **BOTH NOW
+   RESOLVED (2026-09-05/06), during stage 2. Corrected here rather than
+   left stale:**
+   - that memory / interaction-history writes in `/api/chat` are
+     conditional on a non-null `student_id` -- **CONFIRMED.**
+     `app/api/chat/route.ts` gates the write on `if (student_id)`, so
+     anonymous chat genuinely accrues no history.
+   - that **`pg_cron` is available on this Supabase project** --
+     **CONFIRMED, and it is now installed and in use.** Version 1.6.4 was
+     available; it was installed during stage 2 and runs the daily
+     `purge-distress-events` job. The `lti_nonces` sweep can therefore be
+     scheduled the same way when Phase 3 resumes; no redesign needed.
 
 ### Remaining plan detail (unchanged, still correct)
 
@@ -821,7 +824,12 @@ Stage 2 (distress-signal detection) has NOT been started. Stage 1 is now
 closed and the assessment-scope leak above is fixed, so stage 2 is the
 next thing to begin.
 
-### Stage 2 (distress-signal detection): STARTED, design blocked on one decision
+### Stage 2 (distress-signal detection): initial research, superseded in part
+
+> **Read this section as a record of the starting position, not current
+> state.** Two of its findings have since changed and are corrected inline
+> below. Current state is in the later stage 2 sections. Kept because the
+> reasoning still explains why the design looks as it does.
 
 Research done 2026-09-05, before writing any code. The detection half is
 straightforward. The routing half cannot be completed as specified, and
@@ -850,6 +858,13 @@ escalation *enabled*, since that responsible party exists structurally, so
 this is misconfigured relative to spec intent. It is correctly disabled in
 the sense that nobody has actually agreed to receive anything yet, which
 is the state 12.2a insists on until a real person opts in.
+
+> **SUPERSEDED 2026-09-06.** This is no longer true. The project owner is
+> now set as `escalation_recipient_email` for MKTG365, and
+> `escalation_enabled` is `true` (derived). See the escalation-recipient
+> section later in this file. Finding 1 above, that there is no escalation
+> *code*, remains true: the recipient is configured but nothing consumes
+> it, because no notification path exists.
 
 **Why that blocks the routing half rather than merely delaying it.** The
 risk register is explicit that a course with escalation enabled and no
@@ -1150,6 +1165,14 @@ than left implied, because this stage exists partly because escalation
 configuration looked like working infrastructure while having no
 consumer, and a distress log with no reader would be that same defect one
 layer over.
+
+> **RESOLVED 2026-09-06.** No longer accurate as written. A named reader
+> is now recorded and enforced (`distress_log_reader_email`, the project
+> owner, `distress_log_review_interval_hours = 24`), a course cannot open
+> to students without one, and `npm run distress-log` exists as the actual
+> review surface. What remains true from this paragraph: there is still no
+> operator backend, no dashboard, and **no alerting**, so review is a
+> deliberate act the reader performs, not something that reaches them.
 - **Therefore a gating precondition, not a follow-up task: student access
   must not be enabled for any course until a named human has committed to
   reading these events on a stated cadence.** This is enforceable now
@@ -1175,7 +1198,8 @@ have different lifetimes:
   days.** Retains pattern and defensibility value without keeping a
   distressed student's actual words.
 - **Enforced by a scheduled job, not by intention.** `pg_cron` was
-  verified available on this project (version 1.6.4, not yet installed),
+  verified available on this project (version 1.6.4; subsequently
+  installed and now running the daily purge job),
   which also resolves one of the two open Phase 3 claims. An unenforced
   retention policy is the same defect class as escalation config with no
   consumer.
@@ -1522,6 +1546,77 @@ yet. Both sets held. That is a mixed-history result and should stay
 described as one; 17/17 is the correct coverage count, not evidence that
 all 17 carry equal weight.
 
+## STANDING ITEM: stage 2 detects nothing in the live product
+
+The single most important status fact in this file, stated once, plainly,
+because it is easy to lose in the volume of stage 2 detail below.
+
+**`classifyDistress` is not called during a live `/api/chat` exchange.**
+Verified by search on 2026-09-06: `lib/distress.ts` is imported by exactly
+two files, `scripts/test-distress-classifier.ts` and
+`scripts/test-distress-failure-path.ts`. Nothing under `app/` references
+it. `distress_events` has never been written by application code; every
+row that has ever existed in it was inserted manually during testing and
+deleted afterward.
+
+**No student has ever received, or can currently receive, a distress
+response.** The level 2, 3, and 4 response texts do not exist in the
+codebase at all. They exist as approved drafts in this file and nowhere
+else. A student who wrote a crisis disclosure into the live chat today
+would receive an ordinary grounded tutoring answer, exactly as before any
+of stage 2 was built.
+
+**What stage 2 actually produced is a verified mechanism, not a working
+safeguard:** a tested classifier, a table with enforced retention, an
+access gate, a review tool, and a measured test suite. The connective
+tissue between detection and the student is the unbuilt part, and it is
+the whole point of the stage.
+
+**Consequence for the retraction test case:** it is NOT resolved. It
+remains a known, deliberate exception, still failing in the suite. The
+approved fix (distinguish a first crisis classification in a conversation
+from a repeat one, with the repeat brief and BeThe1To-sourced rather than
+a re-run of the full text) lives entirely in the response layer, which is
+the layer that does not exist. It cannot be closed before the wiring work,
+and its test expectation should be revisited at the same time.
+
+## STANDING ITEM: one person currently holds every human role for MKTG365
+
+Recorded as its own note rather than a bullet inside a build entry,
+because it is a standing condition of the system rather than a detail of
+any one change.
+
+**As of 2026-09-06, the project owner is simultaneously:**
+- `escalation_recipient_email` for MKTG365, the human a crisis
+  notification would route to;
+- `distress_log_reader_email` for MKTG365, the human who committed to
+  reading distress events (every 24 hours);
+- the instructor of record for the course, per the same entry;
+- the sole operator with the database access needed to read those logs at
+  all, since the review tool is gated on `SUPABASE_SECRET_KEY`.
+
+**This is accepted as fine right now, and the reason is specific: there
+are zero enrollments, the site is behind the password gate, and no student
+can reach the system.** With no students, there is no one whose disclosure
+could go unread, so a single point of failure costs nothing today.
+
+**It must be revisited the moment a second real person has any role in
+this course, and before that happens rather than after.** Concretely, this
+means before any of: a real student enrolling, a separate instructor of
+record being named, the instructor being onboarded and given the site
+password, or the course being opened beyond `join_code` with a real
+cohort. Each of those turns the arrangement from harmless into a real
+single point of failure, because from that moment there exists a person
+who can disclose something that only one individual is positioned to see,
+respond to, and act on, with no backup if that individual is unavailable,
+unwell, or simply does not run the script that day.
+
+Two specific things to settle at that point, not left implicit here:
+whether the escalation recipient and the distress-log reader should be
+different people (they answer different obligations, and the spec treats
+the faculty-of-record role and the wellbeing-response role as distinct),
+and who the backup reader is when the primary is unavailable.
+
 ### Escalation recipient set, topic-listing flag added, distress review tool built
 
 **MKTG365 escalation recipient is set** to the project owner, named as
@@ -1633,6 +1728,20 @@ ones.
 | Boundary (`possible_risk`/`crisis`) | 7/10 exact |
 | Over-fire guards held | **20/20** |
 | **interpersonal_harm correct** | **41/41** |
+
+> **Permanent caveat on the 41/41, do not quote it without this.** That
+> result was produced by the same underlying classifier, the same prompt,
+> and largely the same case set built for the five-level distress work. Of
+> the 41 cases, only 8 were written for the harm signal (5 disclosures, 3
+> academic guards); the other 33 are pre-existing distress cases on which
+> the signal is asserted to be false. That is a real and useful check
+> against over-firing, and it is **not** an independent adversarial test
+> set built specifically to attack the harm signal. Nobody has tried to
+> defeat it: no paraphrase attacks, no disclosures framed as hypotheticals
+> about a friend, no coursework framings deliberately written to look like
+> disclosures, no non-English or indirect phrasings. 41/41 means "did not
+> fail the cases we thought of while building it," which is weaker than it
+> reads. Treat it as a first-pass result, not as validation.
 
 **The silent hole I went looking for does not exist.** `distress_events`
 stores only `personal_distress` and above, so a harm disclosure
