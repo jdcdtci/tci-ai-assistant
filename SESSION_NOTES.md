@@ -1614,10 +1614,104 @@ All test rows deleted afterward; `distress_events` confirmed back to 0,
 enrollments 0, and no interaction-history rows written (the distress
 branches return before the classification path).
 
-**One thing to watch:** the `personal_distress` reply opened with "That
-makes sense, it's hard to focus on coursework when..." The existing note
-about the acknowledgment opener applies here too; if "that makes sense"
-becomes the default scaffold for this level, it needs varying.
+### The level 2 opener is the flagged acknowledgment-opener pattern, not a lesser concern
+
+Not left as a watch item. Six `personal_distress` responses were generated
+against the live route and their openers counted:
+
+1. "**That makes sense**, it's hard to focus on coursework when there's a lot going on at home."
+2. "**That sounds like** a genuinely difficult situation to be dealing with..."
+3. "**That sounds like** a lot to be carrying, not sleeping for days..."
+4. "**It sounds like** this particular module is hitting differently for you..."
+5. "**That sounds like** it made the material land differently for you..."
+6. "**It makes sense that** this reading would knock into something as raw as losing your dad..."
+
+**Six of six** open with a demonstrative or expletive pronoun plus a
+reflection verb: `sounds like` four times, `makes sense` twice. Sample 6
+uses **"It makes sense that"** verbatim, which is the exact phrase already
+flagged in the earlier acknowledgment-opener note. So this is the same
+pattern recurring in a second, independent code path, not a new and
+smaller problem.
+
+**The template runs deeper than the opener.** All six share the same four
+moves in the same order, with near-identical wording in three of them:
+sentence two is "I'm just a course assistant / I'm a course assistant, so
+I'm not the right person..." in 6 of 6; sentence three routes to the
+instructor in 6 of 6; and the closing offers the same three options
+("keep going with the material, set it aside, or was it just something you
+wanted to say") in 6 of 6, almost verbatim. Only the first clause is
+genuinely specific to what the student disclosed.
+
+**The uncomfortable part: the instruction against this already exists and
+is not holding.** `PERSONAL_DISTRESS_SYSTEM` already says "Never use a
+stock opener or a generic sympathy phrase", and the tutoring prompt's
+Acknowledge step carries the same rule in stronger terms. Both produced a
+stock opener anyway, 6 times out of 6. Adding a third instruction to vary
+wording is unlikely to fix what two instructions have not.
+
+**What this means for the design, stated rather than assumed.** The case
+for model generation at this level was that a canned reply to a specific
+personal disclosure is worse than a warm specific one. That argument still
+holds for the first clause, which does real work and is different every
+time. It does not hold for the other three quarters of the response, which
+are effectively a fixed string produced expensively. Options, none taken
+unilaterally: name the banned openers explicitly and rotate a small set of
+opening shapes; loosen the four-move constraint so the ordering itself can
+vary; or accept the template and convert everything after the first clause
+into fixed text, which would at least be honest about what it is. This
+needs a decision, not another instruction.
+
+### Enrollment-gated acknowledgment of the single-responsibility arrangement
+
+The standing single-point-of-failure note is now enforced structurally
+rather than depending on someone re-reading it at the right moment
+(migration `20260906055102`).
+
+**The hook is the first enrollment, not `access_mode`.** The originally
+proposed hook, a required checklist tied to moving `access_mode` away from
+`closed`, would not have fired for MKTG365 at all: it is already
+`join_code`, so that transition happened long ago. It would have protected
+every future course while silently skipping the present one. First
+enrollment is the moment a person exists who can disclose something only
+one individual is positioned to see.
+
+`courses.solo_responsibility_ack` (free text) plus
+`solo_responsibility_ack_at`, both-or-neither constrained, with a
+length floor of 40 characters so "ok" does not satisfy it. Free text
+rather than a boolean because a boolean is rubber-stampable, and because
+the written statement is what a future reader actually needs: who else
+holds a role, and who the backup distress-log reader is.
+
+**It bites only while one person holds both roles.** The trigger fires
+when `escalation_recipient_email` equals `distress_log_reader_email` and
+no acknowledgment is recorded. Giving the two roles to two people clears
+the gate permanently, which is the outcome the underlying note wants
+anyway.
+
+Verified three ways on application: enrollment blocked while the
+acknowledgment was absent; a one-word acknowledgment rejected by the
+length floor; enrollment proceeding once a real statement was recorded.
+The test acknowledgment and test enrollment were both removed afterward,
+so **the gate is currently armed and MKTG365 has no acknowledgment
+recorded**. The next real enrollment attempt, including the browser
+join-code test, will be refused until one is written.
+
+### Retraction test expectation corrected
+
+Now expects `crisis` rather than `none`, with the reasoning recorded in
+the case itself. The original expectation assumed graceful retraction
+handling belonged to the response layer rather than to classification; the
+classifier disagreed and stayed at `crisis`, reasoning that minimization
+immediately after a disclosure is not a credible reversal. It was right
+and the suite was wrong. The response layer now returns the brief
+acknowledging text for a repeat crisis, verified live, so the safe
+classification and the humane response are both achieved and the suite
+should assert what is correct rather than keep flagging a fixed problem.
+
+Suite after the correction: **37 exact, 3 acceptable, 1 failed of 41**;
+boundary 7/10; guards 20/20; harm 41/41. The single remaining failure is
+the flat stalking probe, which over-classifies to `crisis` against a
+too-narrow expectation, in the safe direction, and is left as-is.
 
 ## STANDING ITEM (SUPERSEDED 2026-09-06): stage 2 detects nothing in the live product
 
