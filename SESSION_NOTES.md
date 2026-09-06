@@ -1546,6 +1546,100 @@ yet. Both sets held. That is a mixed-history result and should stay
 described as one; 17/17 is the correct coverage count, not evidence that
 all 17 carry equal weight.
 
+## BLOCKING: production Google sign-in is non-functional for everyone
+
+Not a rough edge and not a known-issue footnote. **Nobody can sign in on
+`tci-ai-assistant.vercel.app` right now.** Anyone completing Google sign-in
+is redirected to `http://localhost:3000` and lands nowhere. Production has
+therefore never been verified end to end, because sign-in itself does not
+complete there.
+
+**Cause, diagnosed with direct evidence rather than inferred.** Supabase's
+Auth **Site URL is `http://localhost:3000`** and the production callback was
+never added to the allowed redirect list. Supabase accepts any `redirect_to`
+at the authorize step (confirmed live: it forwarded even
+`obviously-not-allowed.example.com` to Google unchanged), then validates it
+at the callback stage and substitutes the Site URL when it is not
+allowlisted.
+
+The proof is in `auth.flow_state.referrer`, which records the redirect
+Supabase actually accepted for each attempt. Every row, including the real
+production sign-in attempts at 06:29 to 06:31 on 2026-09-06, reads
+`http://localhost:3000`. The discrimination is exact: a probe sending
+`http://localhost:3000/auth/callback` had its **full path preserved**
+(allowlisted), while probes sending the production callback and a
+deliberately bogus `example.com` URL were **both collapsed to the bare
+`http://localhost:3000`** (not allowlisted, so the Site URL fallback fired).
+
+**The other two candidates were checked and ruled out.**
+- **Google Cloud Console is not involved and needs no change.** The live 302
+  shows Google's registered `redirect_uri` is
+  `https://guczpkqjetvauokttouo.supabase.co/auth/v1/callback`, which is
+  Supabase's own callback and is identical for localhost and production.
+  Google redirects to Supabase, not to the app, so there is no
+  per-environment Google configuration to fix.
+- **The app code is correct.** `app/page.tsx` is the only
+  `signInWithOAuth` call site and uses
+  `` `${window.location.origin}/auth/callback` ``, which resolves correctly
+  in production. No hardcoded host, no environment variable, so nothing that
+  could be unset in Vercel. A repo-wide grep for `localhost`, `SITE_URL`,
+  `VERCEL_URL`, and `redirectTo` returns only that one line.
+
+**The fix, fully diagnosed and ready to apply.** Supabase dashboard →
+Authentication → URL Configuration:
+- **Site URL** → `https://tci-ai-assistant.vercel.app`
+- **Redirect URLs** → add `https://tci-ai-assistant.vercel.app/**`, and
+  **keep `http://localhost:3000/**` in the list alongside it**. Keeping
+  localhost allowlisted is what preserves local development after the Site
+  URL moves, since allowlisted redirects retain their full URL instead of
+  falling back.
+
+**Deferred deliberately, not forgotten.** This setting is platform-managed:
+there is no config table in the `auth` schema, no Supabase MCP tool exposes
+it, and applying it needs dashboard access or a Management API token. It
+waits until the project owner applies it himself.
+
+**What can be verified afterward without a credential:** re-running the
+authorize probe and confirming `auth.flow_state.referrer` records the full
+production callback instead of collapsing to `http://localhost:3000`. That
+is the exact assertion failing today, so it is a real pass/fail. What cannot
+be verified without the owner: the Google credential entry, the CAPTCHA, the
+consent screen, the code exchange at `/auth/callback`, the session cookie
+being set on the production domain, and landing signed in.
+
+## DEPLOYED to production 2026-09-06
+
+Corrects the repeated statement elsewhere in this file that nothing from
+this session had been deployed. That is no longer true.
+
+25 commits shipped, `1d6119b` (paused Phase 3 plan) through `a1012cc`
+(memory-write failure tracking): 21 files, +4,707/-120. Deployment
+`dpl_6quEt8ojWzhVPtNppiy2Amcg5RJn`, target production, status Ready,
+confirmed serving `tci-ai-assistant.vercel.app` via `vercel inspect` rather
+than assumed from a successful build.
+
+**Two operational gotchas worth recording.** The Vercel CLI was **not
+installed** (`vercel: command not found`) despite prior sessions using it, so
+it was run via `npx`. And plain `vercel --prod` failed with **`Not
+authorized`** even though `whoami` succeeded as `jdcdtci`: `.vercel/project.json`
+carries `orgId: team_25k6avi8FU33xuVXOKOi94UR`, which does not resolve
+against the current team `jdcdtcis-projects`. Adding
+`--scope jdcdtcis-projects` fixed it. The link file is stale and worth
+re-linking so the bare command works next time. The CLI also suggested
+`vercel git connect`; that was **not** run, since auto-deploy stays off by
+standing rule.
+
+**Schema state at deploy:** matched exactly, and there was never a separate
+production database to fall behind. One Supabase project serves both local
+and production, so every migration from this session had been live
+throughout, meaning production had been running old code against a newer
+schema until this deploy resolved it. Nine specific objects the new code
+touches were verified present rather than trusted from migration names.
+
+**Gate verified live and unchanged:** `GET /` 401, `POST /api/chat` 401,
+`POST /api/enroll` 401, `www-authenticate: Basic realm="TCI Assistant"`, and
+a wrong password still 401. Nothing about `SITE_PASSWORD` was altered.
+
 ## Stage 2 IS NOW WIRED into the live chat path (2026-09-06)
 
 Supersedes the standing item below, which is kept because its account of
