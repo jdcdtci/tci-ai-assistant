@@ -19,7 +19,7 @@ const LONG_WAIT_THRESHOLD_MS = 8_000;
 
 export default function Home() {
   const [user, setUser] = useState<AuthUser | null | "loading">("loading");
-  const [course, setCourse] = useState<{ id: string; name: string } | null>(null);
+  const [section, setSection] = useState<{ id: string; label: string; courseName: string } | null>(null);
   const [joinCode, setJoinCode] = useState("");
   const [joinError, setJoinError] = useState<string | null>(null);
   const [isJoining, setIsJoining] = useState(false);
@@ -77,7 +77,7 @@ export default function Home() {
       if (!res.ok) {
         setJoinError(data.error ?? "Something went wrong.");
       } else {
-        setCourse(data.course);
+        setSection(data.section);
       }
     } catch {
       setJoinError("Network error. Please try again.");
@@ -89,7 +89,7 @@ export default function Home() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const trimmed = input.trim();
-    if (!trimmed || isLoading || !course || user === "loading" || !user) return;
+    if (!trimmed || isLoading || !section || user === "loading" || !user) return;
 
     setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
     setInput("");
@@ -104,8 +104,10 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: trimmed,
-          course_id: course.id,
-          student_id: user.id,
+          // Section, not course: entitlement is section-scoped and the
+          // course is derived server-side. student_id is no longer sent at
+          // all; the server reads identity from the verified session.
+          section_id: section.id,
           // Error bubbles are UI-only, never part of the tutoring transcript.
           history: messages
             .filter((m) => m.role !== "error")
@@ -154,7 +156,7 @@ export default function Home() {
     );
   }
 
-  if (!course) {
+  if (!section) {
     return (
       <div className={styles.page}>
         <div className={styles.centeredScreen}>

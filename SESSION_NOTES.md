@@ -1762,6 +1762,22 @@ signed in 06:32:08, enrolled 06:32:20, and produced **zero** interaction
 history, distress events, and memory-write failures. Both enrollments were
 then deleted and MKTG365 confirmed back to **zero enrollments**.
 
+## DO NOT DEPLOY main UNTIL THE SECTIONS MIGRATION IS APPLIED
+
+As of 2026-09-06, `main` contains the section-aware code but the database
+still has the pre-sections schema. **Deploying `main` in this state breaks
+production**: `/api/chat` would call `can_access_section`, which does not
+exist, and return 503 on every request; `/api/enroll` would query a
+`sections` table that does not exist and 500.
+
+This intermediate state is deliberate. The sequencing requires the code to
+be committed and build-ready *before* the migration runs, so the deploy step
+is a build-and-ship with no authoring in the middle, which is what keeps the
+schema/code disagreement window to roughly the length of a Vercel build.
+
+Auto-deploy is off, so nothing ships on its own. The state resolves the
+moment the migration is applied and the deploy runs, back to back.
+
 ## DEFECT (unexploded): distress purge clock is event-age based, not section based
 
 Checked 2026-09-06 as its own immediate question, separate from the sections

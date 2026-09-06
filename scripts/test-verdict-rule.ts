@@ -27,7 +27,8 @@ const anthropic = new Anthropic({
     : {}),
 });
 
-const COURSE_ID = "cbd8d7e2-b787-446e-9bce-aac386dfaaae";
+// Resolved at runtime rather than hardcoded, same reason as the failure-path test.
+let SECTION_ID = "";
 const STUDENT_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 
 const EXPLAIN_WITH_CHECK =
@@ -73,7 +74,7 @@ async function seedPriorTurn(supabase: ReturnType<typeof getSupabaseServiceClien
     anthropic,
     supabase,
     studentId: STUDENT_ID,
-    courseId: COURSE_ID,
+    sectionId: SECTION_ID,
     priorTurns: [],
     latestUser: "What is a sampling frame?",
     assistantResponse: EXPLAIN_WITH_CHECK,
@@ -82,6 +83,9 @@ async function seedPriorTurn(supabase: ReturnType<typeof getSupabaseServiceClien
 
 async function main() {
   const supabase = getSupabaseServiceClient();
+  const { data: sec } = await supabase.from("sections").select("id").limit(1).maybeSingle();
+  if (!sec) throw new Error("No section found. Run the sections migration first.");
+  SECTION_ID = sec.id;
   let allOk = true;
 
   for (const s of SCENARIOS) {
@@ -103,7 +107,7 @@ async function main() {
       anthropic,
       supabase,
       studentId: STUDENT_ID,
-      courseId: COURSE_ID,
+      sectionId: SECTION_ID,
       priorTurns: [
         { role: "user", content: "What is a sampling frame?" },
         { role: "assistant", content: EXPLAIN_WITH_CHECK },

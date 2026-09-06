@@ -28,12 +28,12 @@ export type MemoryFailureReason = "classifier_returned_null" | "exception" | "in
  */
 export async function recordMemoryWriteFailure(
   supabase: Supabase,
-  args: { studentId: string; courseId: string; reason: MemoryFailureReason; detail?: string },
+  args: { studentId: string; sectionId: string; reason: MemoryFailureReason; detail?: string },
 ): Promise<void> {
   try {
     const { error } = await supabase.from("memory_write_failures").insert({
       student_id: args.studentId,
-      course_id: args.courseId,
+      section_id: args.sectionId,
       reason: args.reason,
       // System error text only, never anything the student wrote.
       detail: args.detail?.slice(0, 500) ?? null,
@@ -51,7 +51,7 @@ export type RecordExchangeArgs = {
   anthropic: Anthropic;
   supabase: ReturnType<typeof getSupabaseServiceClient>;
   studentId: string;
-  courseId: string;
+  sectionId: string;
   priorTurns: Turn[];
   latestUser: string;
   assistantResponse: string;
@@ -61,7 +61,7 @@ export async function recordExchange({
   anthropic,
   supabase,
   studentId,
-  courseId,
+  sectionId,
   priorTurns,
   latestUser,
   assistantResponse,
@@ -74,7 +74,7 @@ export async function recordExchange({
     // catch in the route that only logged, so the lost write left no trace.
     await recordMemoryWriteFailure(supabase, {
       studentId,
-      courseId,
+      sectionId,
       reason: "exception",
       detail: err instanceof Error ? err.message : String(err),
     });
@@ -88,7 +88,7 @@ export async function recordExchange({
     // why survived.
     await recordMemoryWriteFailure(supabase, {
       studentId,
-      courseId,
+      sectionId,
       reason: "classifier_returned_null",
     });
     return;
@@ -128,7 +128,7 @@ export async function recordExchange({
       .from("student_interaction_history")
       .select("id, concept, comprehension_check_passed")
       .eq("student_id", studentId)
-      .eq("course_id", courseId)
+      .eq("section_id", sectionId)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -168,7 +168,7 @@ export async function recordExchange({
 
   const { error: insertError } = await supabase.from("student_interaction_history").insert({
     student_id: studentId,
-    course_id: courseId,
+    section_id: sectionId,
     concept: rowConcept,
     // Stays null until the student's next message lets the check be judged.
     comprehension_check_passed: null,
@@ -179,7 +179,7 @@ export async function recordExchange({
     // outcome as the two paths above, so it gets the same durable record.
     await recordMemoryWriteFailure(supabase, {
       studentId,
-      courseId,
+      sectionId,
       reason: "insert_failed",
       detail: insertError.message,
     });

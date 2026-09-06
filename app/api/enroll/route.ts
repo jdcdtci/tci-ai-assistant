@@ -22,50 +22,75 @@ export async function POST(request: NextRequest) {
 
   const supabase = getSupabaseServiceClient();
 
-  const { data: course, error: courseError } = await supabase
-    .from("courses")
-    .select("id, name, expires_at")
+  // Join codes now identify a SECTION, not a course. They are globally
+  // unique rather than unique per course, because a student types a code
+  // with no course context, so it must resolve to exactly one section.
+  const { data: section, error: sectionError } = await supabase
+    .from("sections")
+    .select("id, label, starts_at, ends_at, courses(name)")
     .eq("join_code", join_code.trim())
     .maybeSingle();
 
-  if (courseError) {
+  if (sectionError) {
     return NextResponse.json({ error: "Could not look up that join code right now." }, { status: 500 });
   }
 
-  if (!course) {
-    return NextResponse.json({ error: "That join code doesn't match any course." }, { status: 404 });
+  if (!section) {
+    return NextResponse.json({ error: "That join code doesn't match any section." }, { status: 404 });
   }
 
-  if (course.expires_at && new Date(course.expires_at) < new Date()) {
+  // A section that has not begun is not enterable. Nothing enforced this
+  // before, because only expiry existed.
+  if (section.starts_at && new Date(section.starts_at) > new Date()) {
+    return NextResponse.json({ error: "This section hasn't started yet." }, { status: 400 });
+  }
+
+  if (section.ends_at && new Date(section.ends_at) < new Date()) {
     return NextResponse.json({ error: "This join code has expired." }, { status: 400 });
   }
 
+  const courseName = (section.courses as unknown as { name: string } | null)?.name ?? "";
+
   const { data: enrollment, error: insertError } = await supabase
     .from("enrollments")
-    .insert({ student_email: user.email, course_id: course.id })
-    .select("id, course_id, enrolled_at")
+    .insert({ student_email: user.email, section_id: section.id })
+    .select("id, section_id, enrolled_at")
     .single();
 
   if (!insertError) {
-    return NextResponse.json({ enrollment, course: { id: course.id, name: course.name } });
+    return NextResponse.json({
+      enrollment,
+      section: { id: section.id, label: section.label, courseName },
+    });
   }
 
-  // 23505 = unique_violation on (student_email, course_id): this student is
-  // already enrolled in this course. Not an error condition, per spec --
+  // 23505 = unique_violation on (student_email, section_id): this student is
+  // already enrolled in this section. Not an error condition, per spec --
   // return the existing enrollment instead of failing.
   if (insertError.code === "23505") {
     const { data: existing, error: lookupError } = await supabase
       .from("enrollments")
-      .select("id, course_id, enrolled_at")
+      .select("id, section_id, enrolled_at")
       .eq("student_email", user.email)
-      .eq("course_id", course.id)
+      .eq("section_id", section.id)
       .single();
 
     if (lookupError) {
       return NextResponse.json({ error: "Could not confirm your existing enrollment right now." }, { status: 500 });
     }
 
-    return NextResponse.json({ enrollment: existing, course: { id: course.id, name: course.name } });
+    return NextResponse.json({
+      enrollment: existing,
+      section: { id: section.id, label: section.label, courseName },
+    });
+  }
+
+  // Distinct refusals raised by the enrollment triggers, surfaced with their
+  // real reason rather than the generic message. Previously a closed course
+  // produced only "Could not create your enrollment right now", which was
+  // logged as a known rough edge; sections is the right moment to fix it.
+  if (insertError.code === "23514") {
+    return NextResponse.json({ error: insertError.message }, { status: 409 });
   }
 
   return NextResponse.json({ error: "Could not create your enrollment right now." }, { status: 500 });

@@ -26,7 +26,9 @@ import { recordExchange } from "../lib/memory";
 
 process.loadEnvFile(".env.local");
 
-const COURSE_ID = "cbd8d7e2-b787-446e-9bce-aac386dfaaae";
+// Resolved at runtime rather than hardcoded: the section id did not exist
+// before the sections migration, and hardcoding a uuid would silently rot.
+let SECTION_ID = "";
 const STUDENT_ID = "88888888-8888-8888-8888-888888888888";
 
 // A client whose completion carries no tool_use block. classifyExchange
@@ -47,6 +49,9 @@ const clientThatThrows = {
 
 async function main() {
   const supabase = getSupabaseServiceClient();
+  const { data: sec } = await supabase.from("sections").select("id").limit(1).maybeSingle();
+  if (!sec) throw new Error("No section found. Run the sections migration first.");
+  SECTION_ID = sec.id;
 
   const before = await supabase
     .from("student_interaction_history")
@@ -75,7 +80,7 @@ async function main() {
       anthropic: s.client,
       supabase,
       studentId: STUDENT_ID,
-      courseId: COURSE_ID,
+      sectionId: SECTION_ID,
       priorTurns: [],
       latestUser: "What is a sampling frame?",
       assistantResponse: "A sampling frame is the operational list units are drawn from.",
@@ -83,7 +88,7 @@ async function main() {
 
     const { data: failures } = await supabase
       .from("memory_write_failures")
-      .select("reason, detail, student_id, course_id")
+      .select("reason, detail, student_id, section_id")
       .eq("student_id", STUDENT_ID);
 
     const { count: historyCount } = await supabase
@@ -99,7 +104,7 @@ async function main() {
         rows[0]?.reason === s.expectReason,
         `got ${rows[0]?.reason}`,
       ],
-      ["row carries the student and course", rows[0]?.student_id === STUDENT_ID && rows[0]?.course_id === COURSE_ID, "ids missing"],
+      ["row carries the student and section", rows[0]?.student_id === STUDENT_ID && rows[0]?.section_id === SECTION_ID, "ids missing"],
       [
         "no history row was written",
         (historyCount ?? 0) === (before.count ?? 0),

@@ -44,7 +44,7 @@ const PATTERN_WINDOW_DAYS = 7;
 
 type Row = {
   id: string;
-  course_id: string;
+  section_id: string | null;
   student_id: string | null;
   level: string;
   message: string | null;
@@ -70,29 +70,40 @@ async function main() {
 
   const supabase = getSupabaseServiceClient();
 
-  const { data: courses, error: courseErr } = await supabase
-    .from("courses")
-    .select("id, name, distress_log_reader_email, distress_log_review_interval_hours");
-  if (courseErr) throw new Error(`Could not load courses: ${courseErr.message}`);
+  // Sections now carry access and staffing; the wellbeing reader is a role
+  // row in section_staff rather than a column, so the commitment is a real
+  // assignment rather than a string that happened to be right.
+  const { data: sections, error: sectionErr } = await supabase
+    .from("sections")
+    .select("id, label, courses(name)");
+  if (sectionErr) throw new Error(`Could not load sections: ${sectionErr.message}`);
 
-  const nameById = new Map<string, string>((courses ?? []).map((c) => [c.id, c.name]));
-  const targetCourse = courseName
-    ? (courses ?? []).find((c) => c.name.toLowerCase() === courseName.toLowerCase())
+  const nameById = new Map<string, string>(
+    (sections ?? []).map((s) => [
+      s.id,
+      `${(s.courses as unknown as { name: string } | null)?.name ?? "?"} / ${s.label}`,
+    ]),
+  );
+  const targetSection = courseName
+    ? (sections ?? []).find((s) =>
+        ((s.courses as unknown as { name: string } | null)?.name ?? "").toLowerCase() ===
+        courseName.toLowerCase(),
+      )
     : undefined;
-  if (courseName && !targetCourse) throw new Error(`No course named ${courseName}`);
+  if (courseName && !targetSection) throw new Error(`No section for course ${courseName}`);
 
   const since = new Date(Date.now() - sinceDays * 86_400_000).toISOString();
 
   let query = supabase
     .from("distress_events")
     .select(
-      "id, course_id, student_id, level, message, message_purged_at, interpersonal_harm, created_at",
+      "id, section_id, student_id, level, message, message_purged_at, interpersonal_harm, created_at",
     )
     .gte("created_at", since)
     .order("created_at", { ascending: false })
     .limit(limit);
 
-  if (targetCourse) query = query.eq("course_id", targetCourse.id);
+  if (targetSection) query = query.eq("section_id", targetSection.id);
   if (levelFilter) query = query.eq("level", levelFilter);
 
   const { data, error } = await query;
@@ -100,7 +111,7 @@ async function main() {
   const rows = (data ?? []) as Row[];
 
   console.log(
-    `\nDistress events, last ${sinceDays} day(s)${targetCourse ? ` for ${targetCourse.name}` : ""}${levelFilter ? `, level=${levelFilter}` : ""}\n`,
+    `\nDistress events, last ${sinceDays} day(s)${targetSection ? ` for ${targetSection.label}` : ""}${levelFilter ? `, level=${levelFilter}` : ""}\n`,
   );
 
   if (rows.length === 0) {
@@ -111,7 +122,7 @@ async function main() {
       const body = r.message ?? (r.message_purged_at ? "[message purged per retention policy]" : "[no message stored]");
       const harmTag = r.interpersonal_harm ? "  [INTERPERSONAL HARM]" : "";
       console.log(
-        `  ${fmt(r.created_at)}  ${r.level.padEnd(17)} ${nameById.get(r.course_id) ?? r.course_id}  student=${who}${harmTag}`,
+        `  ${fmt(r.created_at)}  ${r.level.padEnd(17)} ${nameById.get(r.section_id ?? "") ?? "(unattributed section)"}  student=${who}${harmTag}`,
       );
       console.log(`      ${body.replace(/\s+/g, " ").slice(0, 300)}\n`);
     }
@@ -145,7 +156,7 @@ async function main() {
     for (const r of harmEvents) {
       const who = r.student_id ? r.student_id.slice(0, 8) : "anonymous";
       console.log(
-        `    ${fmt(r.created_at)}  ${r.level}  ${nameById.get(r.course_id) ?? r.course_id}  student=${who}`,
+        `    ${fmt(r.created_at)}  ${r.level}  ${nameById.get(r.section_id ?? "") ?? "(unattributed section)"}  student=${who}`,
       );
     }
   }
@@ -158,9 +169,10 @@ async function main() {
   const byStudent = new Map<string, Row[]>();
   for (const r of rows) {
     if (!r.student_id) continue;
+    if (!r.section_id) continue; // unattributed events cannot be grouped
     if (!PATTERN_LEVELS.includes(r.level)) continue;
     if (new Date(r.created_at).getTime() < windowStart) continue;
-    const key = `${r.student_id}|${r.course_id}`;
+    const key = `${r.student_id}|${r.section_id}`;
     byStudent.set(key, [...(byStudent.get(key) ?? []), r]);
   }
 
@@ -171,7 +183,7 @@ async function main() {
     );
     for (const [key, rs] of flagged) {
       const [sid, cid] = key.split("|");
-      console.log(`    student=${sid.slice(0, 8)} course=${nameById.get(cid) ?? cid} events=${rs.length}`);
+      console.log(`    student=${sid.slice(0, 8)} course=${nameById.get(cid) ?? "(unattributed section)"} events=${rs.length}`);
     }
   }
 

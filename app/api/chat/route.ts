@@ -256,13 +256,13 @@ async function recordDistressEvent(
     // real course. The event is still recorded: losing a crisis disclosure
     // because the caller sent a bad course id would be the worst possible
     // reason to lose a safety record.
-    course_id: string | null;
+    section_id: string | null;
     student_id: string | null;
     message: string;
     classification: DistressClassification;
   },
 ) {
-  const { course_id, student_id, message, classification } = args;
+  const { section_id, student_id, message, classification } = args;
 
   let notification_worthy = false;
   let notification_reason: string | null = null;
@@ -274,7 +274,7 @@ async function recordDistressEvent(
       // occurrence, not the third.
       notification_worthy = true;
       notification_reason = "interpersonal_harm";
-    } else if (student_id && course_id && PATTERN_LEVELS.includes(classification.level)) {
+    } else if (student_id && section_id && PATTERN_LEVELS.includes(classification.level)) {
       // Pattern needs identity. Anonymous sessions cannot be linked across
       // events, so for them this can never fire and the in-conversation
       // response is the entire intervention.
@@ -283,7 +283,7 @@ async function recordDistressEvent(
         .from("distress_events")
         .select("id", { count: "exact", head: true })
         .eq("student_id", student_id)
-        .eq("course_id", course_id)
+        .eq("section_id", section_id)
         .in("level", PATTERN_LEVELS)
         .gte("created_at", since);
 
@@ -294,7 +294,7 @@ async function recordDistressEvent(
     }
 
     const { error } = await supabase.from("distress_events").insert({
-      course_id,
+      section_id,
       student_id,
       level: classification.level,
       message,
@@ -346,10 +346,14 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { message, course_id, history } = await request.json();
+  // Takes section_id, never course_id. Entitlement is section-scoped while
+  // course content is course-scoped, and the course is derived server-side
+  // from the section below. That removes the last client-supplied identifier
+  // from the retrieval path rather than merely validating one.
+  const { message, section_id, history } = await request.json();
 
-  if (!message || !course_id) {
-    return NextResponse.json({ error: "Both 'message' and 'course_id' are required." }, { status: 400 });
+  if (!message || !section_id) {
+    return NextResponse.json({ error: "Both 'message' and 'section_id' are required." }, { status: 400 });
   }
 
   // Identity comes from the verified session, never from the request body,
@@ -373,15 +377,15 @@ export async function POST(request: NextRequest) {
   // embedding and retrieval so an unentitled request never reaches
   // match_knowledge_chunks and never spends a Voyage slot.
   const supabase = getSupabaseServiceClient();
-  const { data: allowed, error: accessError } = await supabase.rpc("can_access_course", {
+  const { data: allowed, error: accessError } = await supabase.rpc("can_access_section", {
     p_student_email: verifiedEmail,
-    p_course_id: course_id,
+    p_section_id: section_id,
   });
 
   if (accessError) {
     // Fail closed on an error too. An access check that cannot run is not
     // an access check that passed.
-    console.error(`[access] can_access_course failed for course ${course_id}: ${accessError.message}`);
+    console.error(`[access] can_access_section failed for section ${section_id}: ${accessError.message}`);
     return NextResponse.json({ error: "Could not verify course access right now." }, { status: 503 });
   }
 
@@ -405,21 +409,21 @@ export async function POST(request: NextRequest) {
       // against real courses; attach it only if it exists, otherwise record
       // the event with no course association rather than trusting an
       // unvalidated value or dropping a safety record.
-      const { data: realCourse } = await supabase
-        .from("courses")
+      const { data: realSection } = await supabase
+        .from("sections")
         .select("id")
-        .eq("id", course_id)
+        .eq("id", section_id)
         .maybeSingle();
 
       await recordDistressEvent(supabase, {
-        course_id: realCourse?.id ?? null,
+        section_id: realSection?.id ?? null,
         student_id,
         message,
         classification: refusedDistress,
       });
 
       console.warn(
-        `[access] refused course=${course_id} session=${verifiedEmail ? "yes" : "none"} but served distress response level=${refusedDistress.level} harm=${refusedDistress.interpersonal_harm} course_attached=${realCourse ? "yes" : "no"}`,
+        `[access] refused section=${section_id} session=${verifiedEmail ? "yes" : "none"} but served distress response level=${refusedDistress.level} harm=${refusedDistress.interpersonal_harm} section_attached=${realSection ? "yes" : "no"}`,
       );
 
       const fixedForRefused = fixedDistressResponse(refusedDistress.level, {
@@ -464,7 +468,7 @@ export async function POST(request: NextRequest) {
     // This is the boundary that stops the override from becoming a way to
     // reach course content by phrasing a message as though it were distress.
     console.warn(
-      `[access] refused course=${course_id} session=${verifiedEmail ? "yes" : "none"}`,
+      `[access] refused section=${section_id} session=${verifiedEmail ? "yes" : "none"}`,
     );
     return NextResponse.json(
       {
@@ -516,31 +520,34 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Retrieval and the course lookup are independent, so they run together
-  // rather than in sequence. The course row is needed only for its program,
-  // which selects the persona voice.
-  const [
-    { data: chunks, error: retrievalError },
-    { data: course, error: courseError },
-  ] = await Promise.all([
-    supabase.rpc("match_knowledge_chunks", {
-      query_embedding: queryEmbedding,
-      match_course_id: course_id,
-      match_count: MATCH_COUNT,
-    }),
-    supabase
-      .from("courses")
-      .select("program, institutional_crisis_resource")
-      .eq("id", course_id)
-      .maybeSingle(),
-  ]);
+  // The section carries entitlement, dates, and this section's own crisis
+  // resource; the course it belongs to carries the shared knowledge base and
+  // the program that selects the persona voice. course_id is derived here,
+  // never accepted from the caller.
+  const { data: section, error: sectionError } = await supabase
+    .from("sections")
+    .select("id, course_id, institutional_crisis_resource, courses(program)")
+    .eq("id", section_id)
+    .maybeSingle();
 
-  // Persona is cosmetic, so a failed or missing course lookup must never
-  // cost the student an answer. Fall back to the engine's default voice and
-  // log it; buildVoiceSection degrades to no voice section on its own.
-  if (courseError || !course) {
-    console.warn(`[persona] course lookup failed for ${course_id}; using default voice`);
+  if (sectionError || !section) {
+    // The access check already passed, so the section existed moments ago.
+    // Failing here means the lookup itself broke, and continuing would mean
+    // retrieving from an unknown course. Fail closed rather than guess.
+    console.error(`[chat] section lookup failed after access check for ${section_id}`);
+    return NextResponse.json({ error: "Could not load this section right now." }, { status: 503 });
   }
+
+  const derivedCourseId = section.course_id;
+  const program = (section.courses as unknown as { program: string } | null)?.program;
+
+  const { data: chunks, error: retrievalError } = await supabase.rpc("match_knowledge_chunks", {
+    query_embedding: queryEmbedding,
+    // Course-scoped, and shared across every section of the course. Derived
+    // from the section, so a caller cannot name a course they are not in.
+    match_course_id: derivedCourseId,
+    match_count: MATCH_COUNT,
+  });
 
   // Distress handling is resolved BEFORE the retrieval-failure and
   // empty-material branches below, deliberately. Those branches return
@@ -552,7 +559,7 @@ export async function POST(request: NextRequest) {
   if (distress && distress.level !== "none" && distress.level !== "academic_frustration") {
     if (LOGGABLE_LEVELS.includes(distress.level)) {
       await recordDistressEvent(supabase, {
-        course_id,
+        section_id,
         student_id: typeof student_id === "string" ? student_id : null,
         message,
         classification: distress,
@@ -561,7 +568,7 @@ export async function POST(request: NextRequest) {
 
     const fixed = fixedDistressResponse(distress.level, {
       crisisAlreadyRaised: hasCrisisAlreadyBeenRaised(priorTurns),
-      institutionalResource: course?.institutional_crisis_resource,
+      institutionalResource: section.institutional_crisis_resource,
     });
 
     if (fixed) {
@@ -621,7 +628,7 @@ export async function POST(request: NextRequest) {
   const response = await anthropic.messages.create({
     model: "claude-sonnet-5",
     max_tokens: 2048,
-    system: buildSystemPrompt(chunks, course?.program),
+    system: buildSystemPrompt(chunks, program),
     messages: [...priorTurns, { role: "user", content: message }],
   });
 
@@ -640,7 +647,7 @@ export async function POST(request: NextRequest) {
           anthropic,
           supabase,
           studentId: student_id,
-          courseId: course_id,
+          sectionId: section_id,
           priorTurns,
           latestUser: message,
           assistantResponse: text,
@@ -651,7 +658,7 @@ export async function POST(request: NextRequest) {
         // than leaving a console line as the sole trace inside after().
         await recordMemoryWriteFailure(supabase, {
           studentId: student_id,
-          courseId: course_id,
+          sectionId: section_id,
           reason: "exception",
           detail: err instanceof Error ? err.message : String(err),
         });
