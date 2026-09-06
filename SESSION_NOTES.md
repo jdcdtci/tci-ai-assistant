@@ -1508,13 +1508,19 @@ both the baseline and both revised runs, and those predate the fix, so
 there is real prior-history evidence of no over-firing. It is just not
 counted in the 8/8 figure.
 
-**Known reporting inaccuracy, left in place rather than changed while this
-was being closed out:** the `GUARDS n/n` line understates over-fire
-coverage, since it counts only the 8 newest cases and not the 9 older ones
-doing the same job. Tagging those 9 would make the metric read 17/17 and
-report what it claims to report. Trivial and zero-risk, but it changes a
-number already reviewed and accepted, so it is recorded here as a
-follow-up rather than done unilaterally.
+**Resolved: the 9 older cases are now tagged, and the metric reads
+`GUARDS 17/17`.** It previously counted only the 8 newest guards and so
+understated over-fire coverage. Re-run after tagging confirmed the metric
+is the only thing that moved: overall still 31 exact / 1 acceptable / 1
+failed of 33, boundary still 7/8, same single `PASS~` and same single
+known retraction failure.
+
+**The accurate picture of what the boundary fix stands on, worth keeping
+in this form rather than collapsing to one number:** 9 guards with a real
+track record predating the fix, and 8 written alongside it with no history
+yet. Both sets held. That is a mixed-history result and should stay
+described as one; 17/17 is the correct coverage count, not evidence that
+all 17 carry equal weight.
 
 **BLOCKING: one decision remains before the student-facing half is
 written.** The MKTG365 escalation recipient, which is the same instructor
