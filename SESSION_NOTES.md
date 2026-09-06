@@ -1470,6 +1470,52 @@ it.
    twice. This was the defect that made the temperature bug look like
    rate limiting.
 
+### Fail-open path tested against real forced failures
+
+The loud-failure requirement is now verified deliberately rather than by
+the accident that violated it. `scripts/test-distress-failure-path.ts`
+drives `classifyDistress` against two genuine API failures with the SDK's
+own retries disabled (`maxRetries: 0`) so only our retry and backoff are
+being measured:
+- **invalid API key**, producing a real 401 `authentication_error`
+- **unreachable API host**, producing a real connection error
+
+Five assertions, all passing in both scenarios: returns `null` rather than
+a fabricated verdict; logs **both** failed attempts; logs an explicit
+give-up line; each attempt line carries a real cause rather than an empty
+message; and elapsed time exceeds the 750ms backoff, proving the retry
+actually waited rather than firing twice instantly into the same wall.
+Measured 1159ms and 754ms respectively.
+
+This matters because fail-open means a total outage and a genuinely calm
+student return the identical value. The only thing separating them is that
+a failure is observable, so that property needs its own test rather than
+being a comment in the file.
+
+### Over-fire guard provenance: all 8 are new, with 9 older cases doing similar work untagged
+
+Asked before treating 8/8 as settled, and the honest answer is that the
+guard metric has **no history behind it at all**: all 8 tagged guards were
+written for this expansion (`no-referent guard` 3, `euphemism guard` 3,
+`distress guard` 2), and the `guard` flag did not exist in the prior
+version of the suite. So 8/8 means "the controls written alongside the fix
+held," which is weaker evidence than a long-standing control set holding.
+
+That said, the suite does carry **9 untagged cases from the original 20
+that serve the same protective function**: 3 instrument-item traps, 3
+third-person academic, and 3 academic-frustration cases. All 9 passed in
+both the baseline and both revised runs, and those predate the fix, so
+there is real prior-history evidence of no over-firing. It is just not
+counted in the 8/8 figure.
+
+**Known reporting inaccuracy, left in place rather than changed while this
+was being closed out:** the `GUARDS n/n` line understates over-fire
+coverage, since it counts only the 8 newest cases and not the 9 older ones
+doing the same job. Tagging those 9 would make the metric read 17/17 and
+report what it claims to report. Trivial and zero-risk, but it changes a
+number already reviewed and accepted, so it is recorded here as a
+follow-up rather than done unilaterally.
+
 **BLOCKING: one decision remains before the student-facing half is
 written.** The MKTG365 escalation recipient, which is the same instructor
 conversation already planned. The distress-log reader question is now
