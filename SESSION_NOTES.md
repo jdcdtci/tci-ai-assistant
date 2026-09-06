@@ -1762,6 +1762,104 @@ signed in 06:32:08, enrolled 06:32:20, and produced **zero** interaction
 history, distress events, and memory-write failures. Both enrollments were
 then deleted and MKTG365 confirmed back to **zero enrollments**.
 
+## Stage 3: what it actually was, and its results
+
+**Read this before assuming three defects were skipped.** Stage 3 was
+originally scoped as fixing three pedagogy defects: the tutoring-pattern
+retraction bug, the retrieval contamination bug, and the evidence-based
+comprehension-check verdict rule. **That scoping was wrong on a point of
+fact: all three were already resolved in earlier sessions**, before tonight.
+Verified present in current code before any work began: the retraction rule
+in `SYSTEM_PROMPT`, `isFollowUpOnTopic` as the contamination relevance gate,
+and the evidence-based verdict rule in `lib/classify.ts`.
+
+**So stage 3 is regression verification, not new tuning**, and it should
+read that way to anyone picking this up later. Nothing was silently skipped
+and nothing was tuned. The justification for not tuning is Section 13.4's
+own instruction: these mechanisms have not been shown broken, and changing
+them without real usage data is precisely what that section exists to
+prevent.
+
+**Why regression verification was warranted anyway.** All three were
+verified against a much simpler `/api/chat` than exists now. Tonight added
+the persona voice layer, the authority guardrail, the assessment-scope
+retrieval exclusion, distress classification and its response override, and
+a session/entitlement gate that runs ahead of retrieval. In particular
+`isFollowUpOnTopic` now runs after the entitlement gate and alongside
+distress classification, so its ordering needed proving rather than
+assuming.
+
+**Method note:** two of the three needed the real route, which now requires
+a session for a `join_code` course. MKTG365 was temporarily set to
+`access_mode = 'public'` for the duration and **reverted immediately
+afterward**, confirmed back to `join_code`. The site is password-gated and
+enrollments were zero, so the window was bounded. The verdict-rule test
+drives `lib/memory.ts` directly, since the route's session gate is not the
+mechanism under test.
+
+### Result 1: contamination fix HOLDS
+
+Faithful reproduction (ethics question, then the "give me the python code to
+get into claude code" detour, then a genuine on-topic problem-definition
+question):
+`[retrieval] follow_up=false` — the gate correctly excluded the stale
+detour context, and the answer was properly grounded, naming the retail
+chain example and distinguishing the management decision problem from the
+marketing research problem.
+
+### Result 2: retraction fix HOLDS
+
+A differently-worded follow-up ("So how would you actually turn that into
+something you can measure?") after an already-answered question about
+problem definition returned `follow_up=true`, folded the context in, and
+**built on the prior answer rather than retracting it**, opening "That's
+exactly the move from research problem to research objectives." No claim
+that the material failed to cover something it had already covered.
+
+### Result 3: verdict rule HOLDS, all three outcomes
+
+Driven through the real `recordExchange` path
+(`scripts/test-verdict-rule.ts`), seeding a genuine check each time:
+
+| Scenario | Prior row resolved to | Expected |
+|---|---|---|
+| check answered correctly | `true` | `true` |
+| check answered incorrectly | `false` | `false` |
+| check declined, topic changed | `null` | `null` |
+
+The third is the one that matters most and is easy to get wrong: **declining
+is not failing.** The classifier's own rationale read "Student declined the
+pending check... so there is no evidence of understanding or failure."
+Concept re-stamping also worked, correcting a resolved row's concept from
+"difference between sampling frame and target population" to the check's own
+"sampling frame vs target population".
+
+### One NEW weakness observed, not fixed, not a regression
+
+While constructing the contamination test I used a variant phrasing:
+"**Going back to the course material**, how do you actually tell a
+management decision problem apart from a marketing research problem?" after
+the same detour. That returned `follow_up=true`, folded the stale ethics and
+Python context in, and produced a wrong answer claiming the material does
+not draw that distinction — while the identical question **without** the
+bridge phrase returned `follow_up=false` and answered correctly, and the
+same variant with **no history** also answered correctly. So the failure is
+caused by the phrase, not by the content being unavailable.
+
+This is notable because the relevance tool's own description says it should
+return false for "a message that returns to an earlier topic after an
+intervening unrelated detour" — which is exactly what "going back to the
+course material" signals. The gate contradicted its own specification on
+that phrasing.
+
+**Deliberately not fixed**, for the same reason nothing else here was
+tuned: it is a single observation, not a characterised failure mode, and
+changing the gate on one sample is the tuning-without-data this stage
+explicitly refused. Recorded as a candidate for the first real tuning pass
+once usage data exists. Worth noting it is a pre-existing sensitivity in the
+gate, not something tonight's changes introduced: the inputs to
+`isFollowUpOnTopic` are unchanged.
+
 ## BLOCKING: production Google sign-in is non-functional for everyone
 
 Not a rough edge and not a known-issue footnote. **Nobody can sign in on
