@@ -282,6 +282,12 @@ and prior conversation — don't conflate them:
 
 ## In progress / next
 
+> **Superseded as of 2026-09-05.** The ordering below reflects the state
+> before Phase 3 was planned and paused. The authoritative current priority
+> order is the four-stage sequence in "2026-09-05" at the end of this file.
+> The items below remain true as open work, they are just no longer the
+> next thing.
+
 1. ~~Finish the end-to-end enrollment test.~~ **Done.** A real
    `enrollments` row exists: `student_email = goalkeeper.dielmann@gmail.com`,
    `course_id = cbd8d7e2-b787-446e-9bce-aac386dfaaae` (MKTG365), created
@@ -311,3 +317,303 @@ and prior conversation — don't conflate them:
    as of tonight's secret-key migration, but the env var itself is still
    sitting in both `.env.local` and Vercel. Safe to remove once confirmed
    nothing else in the project (scripts, other tooling) still reads it.
+
+# 2026-09-05
+
+## Phase 3 (LTI 1.3 / Canvas): PAUSED, not abandoned
+
+No code was written and no migration was applied. The plan below was
+corrected across two review rounds and is recorded verbatim so that
+resuming does not mean re-deriving it. Priority moved to the four-stage
+sequence in the next section.
+
+### Blocking factual correction: which Canvas instance
+
+**Canvas Free-for-Teacher cannot be used.** Instructure staff state in
+their own community forums that FFT does not allow the account-admin
+access required to create a Developer Key or install/test an LTI 1.3
+tool, and that they cannot grant that access even temporarily. FFT
+supports LTI 1.1 tools only; LTI 1.3 tools have to be added to the
+instance by Instructure. An earlier version of this plan assumed FFT
+would work -- it does not, and that assumption would have been discovered
+only after the code was written.
+
+**Target instance: self-hosted open-source Canvas running locally in
+Docker.** Verified against that specific setup (the pylti1.3 project's
+Canvas configuration guide, which registers exactly this shape): a local
+Canvas Developer Key form accepts plain `http://127.0.0.1:<port>/...`
+values for Redirect URI, Target Link URI, and OpenID Connect Initiation
+URL, so the local-first test ordering is viable rather than assumed.
+A local Canvas exposes `/api/lti/authorize_redirect`,
+`/api/lti/security/jwks`, and `/login/oauth2/token`.
+
+Two setup gotchas to expect, recorded so they are not rediscovered:
+- The **LTI 1.3 feature flag** must be enabled in Settings -> Feature
+  Options before Developer Keys offers LTI keys at all.
+- Self-hosted Canvas frequently defaults its `iss` to
+  `https://canvas.instructure.com` unless explicitly overridden in its
+  config. Capture the real `iss` from a live login initiation and store
+  whatever the instance actually sends; never assume it matches the
+  hostname.
+
+Cost/practicality: the Canvas Docker stack is a multi-gigabyte Rails +
+Postgres + Redis application running under x86 emulation on Apple
+Silicon. Budget roughly 10-15 GB of disk (for reference, this whole
+project currently occupies 471 MB, 469 MB of which is `node_modules`).
+Fallback if that proves impractical: an Instructure sales-arranged trial
+instance with root admin, which is a contact-and-wait path, not
+self-service.
+
+Local cookie caveat: the state/nonce cookies must be
+`SameSite=None; Secure` because the launch is a cross-site POST. Chrome
+treats `localhost` as a trustworthy origin and will accept `Secure`
+cookies there over plain http; Safari is a separate check, not assumed.
+
+### Tables planned
+
+All new/altered tables follow the standing convention without exception:
+RLS enabled, default-deny for `anon`/`authenticated`, one explicit
+`service_role`-only policy, **confirmed live via `pg_policies`** (policy
+count, role, command) rather than assumed.
+
+- **`lti_platforms`** -- per-platform registration, as DB rows rather
+  than env vars, per spec 6.3 multi-tenancy: `id`, `issuer`, `client_id`,
+  `auth_endpoint`, `token_endpoint`, `jwks_url`, `created_at`; unique on
+  `(issuer, client_id)`.
+- **`lti_course_links`** -- `platform_id`, `deployment_id`, `context_id`,
+  `course_id -> courses(id)`, `created_at`; unique on
+  `(platform_id, deployment_id, context_id)`. Resolving a launch through
+  this table doubles as deployment_id validation: an unregistered
+  deployment/context resolves to nothing and yields a clear "this Canvas
+  course isn't linked yet" page, which is also the natural admin
+  workflow.
+- **`lti_identities`** -- `platform_id`, `subject` (the `sub` claim, the
+  only guaranteed-stable identifier since email is optional in LTI and
+  can be withheld by Canvas privacy settings), `auth_user_id uuid not
+  null references auth.users(id)`, `email` (nullable), `name` (nullable),
+  `created_at`; unique on `(platform_id, subject)` so create-or-return is
+  race-safe via the same 23505 pattern already used by enrollments.
+- **`lti_nonces`** -- replay protection at the DB layer per the standing
+  guardrail rule. Keyed on **`(platform_id, nonce)`**, not `nonce` alone,
+  since a nonce is only meaningful per issuer. Cleanup is a **scheduled
+  sweep**, not opportunistic deletion on the request path.
+- **`lti_launches`** -- the per-launch record. `id`, `platform_id`,
+  `course_link_id`, `auth_user_id`, `resource_link_id`, `message_type`,
+  `roles` (jsonb), `context_claim` (jsonb), `custom_claim` (jsonb),
+  `created_at`. Exists because spec 6.8 says Canvas reports
+  graded-assignment context at launch and 3.8 requires assessment mode to
+  be a system-reported flag never inferred from conversation. Without
+  this table the phase produces a shape that structurally cannot carry
+  that flag, making Phase 4.3 a refactor instead of an addition.
+  The redirect after launch carries `?launch=<id>`, and the client passes
+  `launch_id` on chat requests; the server resolves the course *from the
+  launch row* after verifying `launch.auth_user_id` matches the session
+  user, so the launch id is the only thing passed through, never a
+  trusted course id.
+- **Alter `enrollments`** -- add nullable `student_id uuid` (named to
+  match `student_interaction_history`, not `student_id_uuid`), a partial
+  unique index on `(student_id, course_id) where student_id is not null`,
+  a `role text not null default 'learner'` column with a CHECK
+  constraint, and a backfill `UPDATE` joining existing rows to
+  `auth.users` by email. `student_email` stays as an attribute, no longer
+  the sole key.
+
+### The four accepted fixes from final review
+
+1. **`enrollments.student_id` FK to `auth.users` uses `ON DELETE
+   RESTRICT`, not `ON DELETE CASCADE`.** Deleting an auth user who has
+   enrollments should fail loudly rather than silently destroying the
+   enrollment records; erasure becomes an explicit, ordered operation
+   rather than a side effect. (Open question at resume: whether
+   `lti_identities.auth_user_id` should be made RESTRICT for the same
+   reason, since it was specced CASCADE and the two are now asymmetric.
+   Not decided.)
+2. **Platform resolution must key on issuer AND client_id together, as a
+   hard rule.** Never issuer alone. A single issuer can host multiple
+   client_ids (multiple registrations/tenants), so issuer-only resolution
+   would cross tenants. The unique constraint already expresses this; the
+   rule is that every lookup in `/api/lti/login` and `/api/lti/launch`
+   must actually use both. Canvas supplies `client_id` in the login
+   initiation and `aud` in the token.
+3. **`lti_launches` still needs a retention classification.** Spec 3.2
+   sets interaction-history deletion at thirty days after course
+   completion; 9.3 leaves audit-log retention open. `lti_launches` holds
+   launch context (roles, context, custom claims) tied to an identifiable
+   student and is FERPA-relevant under Tier 3, so it has to be classified
+   as one or the other before it holds real student data. Not decided.
+4. **Two claims asserted in the plan are unverified and must be verified
+   before anything relies on them:**
+   - that memory / interaction-history writes in `/api/chat` are already
+     conditional on a non-null `student_id` (this is the entire basis for
+     the claim that anonymous public-course chat "simply accrues no
+     history");
+   - that **`pg_cron` is available and enabled on this Supabase project**
+     for the scheduled `lti_nonces` sweep. If it is not, the sweep needs
+     a different mechanism and the nonce-table design changes with it.
+
+### Remaining plan detail (unchanged, still correct)
+
+- **Identity resolution: match before mint.** Order is (1) `lti_identities`
+  lookup on `(platform_id, sub)`; (2) on miss with an email claim present,
+  look up `auth.users` by that email and link to the existing user; (3)
+  mint a new auth user only when there is genuinely no match. Without
+  step 2, a student who enrolled via Google and later launches from
+  Canvas gets a second auth user, a second enrollment, and a second
+  interaction history -- the same two-inconsistent-keys defect this
+  project already found once, recreated one layer up. **Duplicate
+  handling, explicitly:** if `createUser` fails on a duplicate email
+  (race, or a listing miss), re-run the email lookup and link; never
+  error out, never mint a second user. A 23505 on the `lti_identities`
+  insert (two concurrent first launches) likewise re-selects and uses the
+  winner's row.
+- **Role gating.** Auto-enroll only on the `Learner` membership role, with
+  the role stored on the enrollment row. An instructor clicking Course
+  Navigation otherwise becomes a student enrollment and, downstream, a
+  student in the interaction history and struggle-pattern aggregate. An
+  instructor launch still gets identity resolution and a session but no
+  enrollment, landing on an explicit "instructor view isn't built yet"
+  page. Canvas's Student View test student launches with the Learner
+  role, so an instructor can still exercise the real tutoring path
+  through the supported Canvas mechanism.
+- **Nonce handling is two separate checks, both required.** (1) The
+  `id_token`'s `nonce` must equal the nonce *we issued* at login
+  initiation, held in the HttpOnly cookie set by `/api/lti/login`, which
+  proves this launch answers our request. (2) Insert into `lti_nonces`;
+  a unique violation means replay and is rejected. The first is not
+  implied by the second.
+- **Session lifetime, stated rather than left implicit.** An LTI launch
+  mints a standard Supabase session: ~1-hour access token, auto-refreshed
+  by the middleware via a rotating refresh token, no absolute expiry by
+  default, invalidated by sign-out or admin revocation -- identical to a
+  Google-path session. So LTI-minted *identity* outlives the launch,
+  exactly as join-code identity outlives the join. Recommendation was to
+  accept this deliberately, because what spec 6.7 refused to let outlive
+  its source is **launch context**, and launch context lives only in
+  `lti_launches` rows passed explicitly: nothing launch-derived ever
+  rides on the session, and access is re-gated per request by
+  `can_access_course`. If a hard cap on the session itself is wanted,
+  Supabase's time-boxed sessions (dashboard-configurable, Pro plan) is
+  the clean lever. **Not yet chosen by the user.**
+- **The `public` access-mode contradiction, resolved.** No session plus
+  `access_mode = 'public'` means the chat proceeds anonymously and
+  accrues no history; a 401 applies only when the course is not public.
+  Encoded in a new SQL function **`can_access_course(p_student_id,
+  p_student_email, p_course_id)`** at the DB layer per the standing
+  guardrail rule: public -> allowed regardless of null identity;
+  otherwise requires a live (unexpired) course and a matching enrollment
+  by uuid or by the legacy email key. This also finally enforces spec
+  6.12.2's "existing students lose active access at expiration," which
+  is currently enforced nowhere at chat time.
+
+### Test order (regression moved earlier, deliberately)
+
+1. Migrations (all tables above, `can_access_course`, the nonce sweep),
+   `pg_policies` verified per table.
+2. `/api/chat` hardening: resolve the student server-side from the
+   session, stop trusting the client-supplied `student_id`, gate on
+   `can_access_course`.
+3. **Browser regression of the Google -> join-code -> chat path, in the
+   real UI, immediately after the contract change and before any LTI code
+   is exercised.** Step 2 is the contract change; rule 1 exists because a
+   silent break went undetected for weeks, and testing the existing path
+   only after the new path succeeds reverses the discipline that rule
+   encodes.
+4. LTI code: `jose`, `lib/lti.ts`, `/api/lti/login`, `/api/lti/launch`,
+   `/api/lti/jwks`, `/api/me`, `page.tsx` arrival handling.
+5. Local Canvas stood up in Docker; Developer Key created there;
+   `lti_platforms` and `lti_course_links` rows inserted from its real
+   values.
+6. Full launch test through the local Canvas UI: launch -> grounded chat
+   answer; DB rows verified; replayed launch rejected; instructor launch
+   gated; Student View launch enrolls as learner.
+7. Deliberate `vercel --prod` with production redirect URIs added, live
+   re-verification, notes updated.
+
+Honest caveat recorded at pause: a local Docker Canvas cannot meaningfully
+launch into the production URL for outside users, so production
+verification against a *real institutional* Canvas stays gated on having
+one. The claim available after step 7 is "verified end-to-end against a
+real Canvas instance locally, deployed live, pending first institutional
+registration" -- consistent with spec 6.8 and 9.2, which already list
+Canvas rollout specifics as an open item pending a named institution.
+
+### Canvas Developer Key settings (for when this resumes)
+
+Created in the self-hosted instance at Admin -> Developer Keys -> + LTI
+Key, manual configuration. Redirect URIs / Target Link URI ->
+`/api/lti/launch`; OpenID Connect Initiation URL -> `/api/lti/login`;
+JWK Method -> Public JWK URL -> `/api/lti/jwks`; LTI Advantage services
+all **off** (no AGS/NRPS this phase); Placement: Course Navigation,
+launch target **new tab**; Privacy Level **Public** (sends name and
+email; "Anonymous" instead exercises the synthetic-email fallback).
+Then toggle the key ON, copy the **Client ID** (not a secret -- it goes
+in an `lti_platforms` row, never `.env.local`), install it in the test
+course via Settings -> Apps -> + App -> By Client ID, and take the
+**Deployment ID** from the installed app's details.
+
+Launch-only LTI needs **no client secret**. Signature verification uses
+Canvas's public keys; our own keypair matters only for LTI Advantage
+services (grade passback, out of scope per the Section 5 wall), but
+Canvas's key form requires a public JWK regardless, so the keypair is
+generated now and we are AGS-ready later. The only new `.env.local` entry
+is `LTI_TOOL_PRIVATE_KEY` (base64 PKCS8), generated locally, never from a
+dashboard, and written by a script that does not print it -- and per the
+standing rule, only after confirming no editor has `.env.local` open.
+
+Iframe note: Chrome blocks Basic-auth prompts inside cross-origin
+iframes, so an iframe-embedded launch would fail *silently* behind
+`SITE_PASSWORD`. Hence new-tab placement for this phase. Iframe embedding
+plus storage-partitioned cookies is a deliberate later step, not smuggled
+into this one.
+
+## New priority sequence (supersedes "In progress / next" above)
+
+Each stage gates the next. Scope is all currently active courses, which
+as of today is exactly one: MKTG365 (`access_mode = 'join_code'`, one
+enrollment, one license-confirmed source document). "All active courses"
+therefore means *built parameterized, not hardcoded to MKTG365*, rather
+than meaning a large fleet.
+
+1. **Persona and voice pass.** Cosmetic only, per spec 2.3. Must not
+   touch any capability or guardrail logic.
+2. **Distress-signal detection**, closing the top item of spec 9.1.
+   Gates stages 3 and 4: both increase how much and how proactively the
+   tutor talks to students, and doing that before this closes increases
+   exposure to the exact risk 9.1 exists to catch.
+3. **Pedagogy tuning**, scoped only to defects already diagnosed with
+   real evidence: the retraction bug, the retrieval contamination bug,
+   and the evidence-based comprehension-check verdict rule. Everything
+   else in Section 13's tutoring parameter catalog stays frozen at its
+   documented default, per the spec's own instruction not to tune ahead
+   of real usage data.
+4. **Struggling-student detection and proactive outreach** per spec 3.3,
+   including building the scheduler that section says the engine does not
+   have, and deciding the out-of-band contact channel and its opt-out
+   mechanics (still listed open in 9.3). Largest new infrastructure in
+   this sequence; goes last because it depends on stage 2.
+
+### Stage 1 finding: persona is per program, and the schema has nowhere to put it
+
+Confirmed from the spec before building, so no assumption gets baked in:
+**persona is a per-program layer, not a single global voice.** Spec 1.3:
+"It is not a single persona. Nancy, the demo TA, is retired. Persona is a
+per-program layer, not a fixed identity." The Section 2 layer table gives
+the axis as "Per program" with ACI warm practitioner / AIE graduate peer
+/ TCI collegial academic, and 2.3 makes it strictly cosmetic: persona is
+voice, never capability, precisely so a warm ACI tone cannot loosen a
+for-credit integrity rule.
+
+Two things block a clean start, both requiring a decision rather than an
+assumption:
+- **There is no program dimension anywhere in the system.** `courses` has
+  no `program` column, there is no persona config table, and the system
+  prompt is a single hardcoded global string at
+  `app/api/chat/route.ts:181`. Per-program persona has nowhere to live
+  yet. Which program MKTG365 belongs to (ACI, AIE, or TCI University
+  Online) is not recorded anywhere and must not be guessed -- it also
+  determines the guardrail tier, which is a *separate* axis that stage 1
+  must not touch.
+- **Spec 9.4 leaves a genuinely open product question:** "Persona
+  identity per program: retire Nancy fully, or keep a named persona per
+  surface?" The per-program axis is settled; whether each persona carries
+  a *name* is explicitly undecided in the spec and is the user's call.
