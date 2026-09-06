@@ -1670,10 +1670,31 @@ two separate instructions against stock openers had already failed, so a
 third was not the answer.
 
 **What is generated:** one or two sentences reflecting the specific thing
-the student said, bounded structurally by `max_tokens: 120` rather than by
-instruction alone, with the previously observed formulas ("that sounds
-like", "that makes sense", "it makes sense that", "it sounds like") named
-and forbidden explicitly.
+the student said.
+
+**Which part of this is actually load-bearing, stated directly rather than
+left implied.** `max_tokens: 120` at the call site is **the mechanism**
+preventing the reflection from re-templating. It is a structural bound: a
+response that cannot exceed roughly two sentences cannot contain the
+limitation sentence, the instructor routing, and the three-option close,
+whatever the model would otherwise be inclined to produce.
+
+The prompt language naming and forbidding the four observed formulas
+("that sounds like", "that makes sense", "it makes sense that", "it sounds
+like") is a **supporting instruction, not the fix.** It should not be
+credited with the result. The evidence for that distinction is direct:
+before this change, two separate instructions against stock openers were
+already in place, one in `PERSONAL_DISTRESS_SYSTEM` and one in the tutoring
+prompt's Acknowledge step, and the model produced a stock opener in **six
+out of six** live samples anyway. Instruction against templating had
+already been tried twice and had already failed at full strength.
+
+**Warning for whoever changes this later.** If `max_tokens` is ever raised
+or removed, do not assume the naming-and-forbidding language will hold the
+line on its own, because the historical record here is that instructions of
+exactly that kind did not. Treat any loosening of the bound as reopening
+the question, and re-run a batch of `personal_distress` samples to check
+the openers before accepting it.
 
 **What is now fixed:**
 

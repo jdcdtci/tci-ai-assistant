@@ -429,6 +429,16 @@ export async function POST(request: NextRequest) {
     try {
       const reflectionReply = await anthropic.messages.create({
         model: "claude-sonnet-5",
+        // THIS BOUND IS THE MECHANISM, not a performance setting. A response
+        // that cannot exceed roughly two sentences cannot re-grow the
+        // limitation sentence, the instructor routing, and the three-option
+        // close that now live in fixed text. The prompt also names and
+        // forbids the stock openers, but that is a supporting instruction:
+        // two separate instructions against stock openers were already in
+        // place before this change and the model produced one in six out of
+        // six live samples anyway. If you raise or remove this, do not
+        // assume the wording rules will hold on their own. Re-run a batch of
+        // personal_distress samples and check the openers first.
         max_tokens: 120,
         system: PERSONAL_DISTRESS_REFLECTION_SYSTEM,
         messages: [...priorTurns, { role: "user", content: message }],
