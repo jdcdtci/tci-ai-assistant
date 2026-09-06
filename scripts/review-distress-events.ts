@@ -49,6 +49,7 @@ type Row = {
   level: string;
   message: string | null;
   message_purged_at: string | null;
+  interpersonal_harm: boolean;
   created_at: string;
 };
 
@@ -84,7 +85,9 @@ async function main() {
 
   let query = supabase
     .from("distress_events")
-    .select("id, course_id, student_id, level, message, message_purged_at, created_at")
+    .select(
+      "id, course_id, student_id, level, message, message_purged_at, interpersonal_harm, created_at",
+    )
     .gte("created_at", since)
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -106,7 +109,10 @@ async function main() {
     for (const r of rows) {
       const who = r.student_id ? r.student_id.slice(0, 8) : "anonymous";
       const body = r.message ?? (r.message_purged_at ? "[message purged per retention policy]" : "[no message stored]");
-      console.log(`  ${fmt(r.created_at)}  ${r.level.padEnd(17)} ${nameById.get(r.course_id) ?? r.course_id}  student=${who}`);
+      const harmTag = r.interpersonal_harm ? "  [INTERPERSONAL HARM]" : "";
+      console.log(
+        `  ${fmt(r.created_at)}  ${r.level.padEnd(17)} ${nameById.get(r.course_id) ?? r.course_id}  student=${who}${harmTag}`,
+      );
       console.log(`      ${body.replace(/\s+/g, " ").slice(0, 300)}\n`);
     }
   }
@@ -119,6 +125,30 @@ async function main() {
   console.log(
     `  Totals: ${Object.entries(counts).map(([k, v]) => `${k}=${v}`).join(", ") || "none"}  (${rows.length} event(s))`,
   );
+
+  // Interpersonal-harm events bypass the pattern threshold entirely and are
+  // surfaced on FIRST occurrence. The 3-in-7-days rule exists to filter
+  // noise from ordinary wellbeing struggle; that reasoning does not apply to
+  // a disclosure of harassment, assault, discrimination, stalking, or
+  // dating or domestic violence, where the obligation to know arises the
+  // first time rather than the third.
+  //
+  // Note precisely what "bypass" means here: this makes the event appear on
+  // first occurrence in THIS output. It does not send anything to anyone.
+  // There is no delivery channel, so visibility is bounded by how often this
+  // script is actually run.
+  const harmEvents = rows.filter((r) => r.interpersonal_harm);
+  if (harmEvents.length) {
+    console.log(
+      `\n  INTERPERSONAL HARM: ${harmEvents.length} event(s), shown on first occurrence (pattern threshold bypassed):`,
+    );
+    for (const r of harmEvents) {
+      const who = r.student_id ? r.student_id.slice(0, 8) : "anonymous";
+      console.log(
+        `    ${fmt(r.created_at)}  ${r.level}  ${nameById.get(r.course_id) ?? r.course_id}  student=${who}`,
+      );
+    }
+  }
 
   // Pattern check. Only identified students can be tracked across events;
   // anonymous sessions are unlinkable by construction, so a recurring

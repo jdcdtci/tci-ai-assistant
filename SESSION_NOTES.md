@@ -1591,6 +1591,80 @@ be pasted into shared channels.
 detection firing at exactly 3, and level/date filtering), then deleted;
 `distress_events` confirmed back to **0 rows**.
 
+### Interpersonal-harm signal: notification timing only
+
+A second signal captured at classification time, alongside the existing
+level, indicating whether the disclosed content itself indicates
+harassment, sexual assault, discrimination, stalking, or dating or
+domestic violence. **Nothing student-facing changed.** No new response
+category and no new text: `personal_distress` and `possible_risk` remain
+the mechanism that catches these disclosures, with the responses already
+designed for those levels.
+
+**Why a separate signal rather than a sixth level.** The level scale
+measures how much distress a student is expressing; this measures what the
+content is about. They are orthogonal, and the tests confirmed it in both
+directions: a calm stalking report and an acute suicidal crisis sit at
+similar levels while differing entirely on this signal. Making it a level
+would have forced a new response category, which was explicitly not wanted.
+
+**What it changes: the pattern threshold only.** The 3-events-in-7-days
+rule exists to filter noise from ordinary wellbeing struggle. That
+reasoning does not hold for a disclosure of interpersonal harm, where the
+obligation to know arises on the first occurrence. When the signal is
+true, the pattern requirement is bypassed and the event surfaces on first
+occurrence. When false, behaviour is unchanged.
+
+**Stated plainly, because the word "immediate" would otherwise imply
+something false: there is still no delivery channel.** No mail dependency,
+no notification code. The bypass makes an event appear on first occurrence
+in `npm run distress-log`; it sends nothing to anyone. Against the
+committed 24-hour review cadence, worst-case visibility is about a day.
+This is an occurrence-count change, not a latency change.
+
+**Test results, 41 cases (was 33).** Five real disclosures that must set
+the signal, three academic-research guards for this course that must not,
+and the signal asserted on **every** case including all 33 pre-existing
+ones.
+
+| | Result |
+|---|---|
+| Overall | 36 exact, 3 acceptable, 2 failed |
+| Boundary (`possible_risk`/`crisis`) | 7/10 exact |
+| Over-fire guards held | **20/20** |
+| **interpersonal_harm correct** | **41/41** |
+
+**The silent hole I went looking for does not exist.** `distress_events`
+stores only `personal_distress` and above, so a harm disclosure
+classifying as `none` would never be logged and the bypass could never
+fire for it. The suite now asserts this explicitly and warns if it ever
+happens. A deliberately flat, unemotional stalking report was written to
+probe exactly that case; it classified at `crisis`, and no case in the
+suite produced `interpersonal_harm` true below a storable level.
+
+**Two failures, both expectation problems rather than defects.**
+1. The flat stalking probe returned `crisis` where the case expected
+   `personal_distress`, because the case did not list `crisis` as
+   acceptable. It over-classified relative to my expectation, in the safe
+   direction, on content (escalating stalking to the student's home) where
+   `crisis` is defensible. Left failing rather than adjusted, consistent
+   with how the retraction case was handled: adjusting an expectation to
+   match observed output is how a suite quietly stops testing anything.
+2. The known retraction case, unchanged.
+
+**Verified end to end in the review tool.** Two seeded rows, one harm and
+one non-harm, each a **single** occurrence and therefore below the pattern
+threshold. The harm event surfaced in its own INTERPERSONAL HARM section
+on first occurrence; the non-harm event correctly triggered no pattern
+section at all. Rows also carry an inline `[INTERPERSONAL HARM]` tag. Both
+seeded rows deleted afterward, `distress_events` confirmed back to 0.
+
+**Explicitly not built, and still blocked:** the dedicated Title IX
+detection layer, the email-and-transcript delivery system, and the
+syllabus-based coordinator lookup. Those remain blocked on confirming
+whether MKTG365's syllabus names a Title IX coordinator and on verifying
+that contact from a real institutional source. Nothing here unblocks them.
+
 **Not started, deliberately:** any detection of categories beyond the
 current five distress levels. That decision is pending and will arrive as a
 separate, explicitly scoped request once the owner has settled which

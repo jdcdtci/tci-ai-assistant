@@ -35,6 +35,14 @@ export type DistressSubject = "self" | "another_person" | "coursework_or_hypothe
 export type DistressClassification = {
   level: DistressLevel;
   subject: DistressSubject;
+  // Independent of level, and deliberately not a level of its own. The level
+  // scale measures how much distress the student is expressing; this
+  // measures what the disclosed content is about. A student can disclose
+  // harassment calmly, and can be in acute distress for reasons involving no
+  // interpersonal harm at all. Its only effect is on notification timing:
+  // when true, the 3-in-7-days pattern threshold is bypassed. It changes no
+  // student-facing response.
+  interpersonal_harm: boolean;
   rationale: string;
 };
 
@@ -56,13 +64,18 @@ const DISTRESS_TOOL: Anthropic.Tool = {
         description:
           "Who the message is actually about. 'self' when the student speaks about their own situation or state. 'another_person' when they describe a real person they are concerned about. 'coursework_or_hypothetical' when the content is study design, instrument wording, hypothetical research subjects, or academic discussion, including discussion of distressing topics as subject matter.",
       },
+      interpersonal_harm: {
+        type: "boolean",
+        description:
+          "True only when the content is a real disclosure or report of interpersonal harm: harassment, sexual assault, discrimination, stalking, or dating or domestic violence. Independent of level: a calm disclosure can be true at a low level, and an acute crisis with no such content is false. False for academic or study-design discussion of these subjects.",
+      },
       rationale: {
         type: "string",
         description:
           "One short sentence explaining the level chosen, and where relevant which uncertainty rule was applied. Used for debugging and review.",
       },
     },
-    required: ["level", "subject", "rationale"],
+    required: ["level", "subject", "interpersonal_harm", "rationale"],
   },
 };
 
@@ -98,7 +111,15 @@ Critically, a survey item is itself written in the first person. A student who q
 
 Third person is not automatically safe. The academic exclusion covers hypothetical and study-design discussion. It does not cover a student telling you about a real person they are worried about. "My roommate said she doesn't want to live anymore" is a real disclosure and must be treated as one.
 
-A real disclosure can be embedded inside academic framing. "I'm designing the depression survey and honestly I've been having those thoughts myself" is a first-person disclosure, not coursework, regardless of the academic context surrounding it.`;
+A real disclosure can be embedded inside academic framing. "I'm designing the depression survey and honestly I've been having those thoughts myself" is a first-person disclosure, not coursework, regardless of the academic context surrounding it.
+
+Separately from the level, record interpersonal_harm. This is an independent signal about what the content is ABOUT, not a measure of how distressed the student sounds, and it does not change which level you choose.
+
+Set interpersonal_harm true when the message is a real disclosure or report of harassment, sexual assault, discrimination, stalking, or dating or domestic violence. It applies whether the conduct happened to the student, is happening now, or is something they are reporting about another real person. It applies regardless of how calmly it is worded: a flat, unemotional report of being followed home is still a disclosure of interpersonal harm.
+
+Set interpersonal_harm false for academic and study-design discussion of these same subjects. This course is marketing research, and coursework about workplace harassment, discrimination in hiring, misconduct reporting, or how to word survey items on those topics is ordinary academic work. A student asking how to design a study on workplace harassment without re-traumatizing respondents is doing coursework: interpersonal_harm is false, exactly as the level is none.
+
+The two signals are independent in both directions. A calm disclosure of stalking can be interpersonal_harm true at a lower distress level. A student in acute crisis over academic failure or bereavement is interpersonal_harm false at the highest level. Judge each separately.`;
 
 function renderContext(history: Turn[], latestUser: string): string {
   const lines = history.map((t) => `${t.role === "user" ? "STUDENT" : "ASSISTANT"}: ${t.content}`);
