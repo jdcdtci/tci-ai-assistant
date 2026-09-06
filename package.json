@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "ingest": "tsx scripts/ingest-chunks.ts"
+    "ingest": "tsx scripts/ingest-chunks.ts",
+    "distress-log": "tsx scripts/review-distress-events.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",

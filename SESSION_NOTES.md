@@ -1522,11 +1522,86 @@ yet. Both sets held. That is a mixed-history result and should stay
 described as one; 17/17 is the correct coverage count, not evidence that
 all 17 carry equal weight.
 
-**BLOCKING: one decision remains before the student-facing half is
-written.** The MKTG365 escalation recipient, which is the same instructor
-conversation already planned. The distress-log reader question is now
-answered and enforced; the crisis resource question is answered by the 988
-baseline with an institution-specific field ready to layer in later.
+### Escalation recipient set, topic-listing flag added, distress review tool built
+
+**MKTG365 escalation recipient is set** to the project owner, named as
+instructor of record for this course. `escalation_enabled` flipped to
+`true` automatically, confirming the generated column behaves as designed
+(there is no second flag to keep in sync, by construction). This closes the
+item that had been blocking the stage 2 student-facing half.
+
+Two things recorded rather than glossed:
+- **A discrepancy worth confirming.** Earlier notes framed the instructor
+  as a separate person still to be onboarded ("their course", "once
+  they're onboarded"). This entry names the project owner as instructor of
+  record. Both may be true if the owner teaches the course while another
+  party is involved in content or administration, but if a different human
+  is the actual instructor of record, the escalation recipient should be
+  revisited, since it determines who receives a crisis notification. Acted
+  on as instructed; flagged because a wrong value here routes crisis
+  notifications to the wrong person. Practical risk today is nil: zero
+  enrollments, site gated, and no notification code exists yet.
+- **Single point of failure.** The same person is now both the escalation
+  recipient and the committed distress-log reader. Acceptable while
+  enrollment is zero and the course is gated; worth revisiting before real
+  students arrive or if a separate instructor is onboarded.
+
+**`courses.topic_listing_enabled` added**, boolean, `not null default
+false`, direct database entry only, no UI and no new authentication. It is
+**currently inert**: setting it true changes nothing, because the feature
+is unbuilt. Written into the migration and the column comment so a future
+session cannot mistake the flag for the feature: it does **not** lift the
+`assessment_scope` retrieval exclusion, which closed a live leak and stands
+on its own, and it does **not** resolve the Section 3.8 system-reported
+assessment identity question, which is the actual blocker.
+
+**Distress review tool: `npm run distress-log`**
+(`scripts/review-distress-events.ts`).
+
+**Why a local script rather than a web page, which is the substantive
+design decision here.** The brief was admin-only with no new authentication
+and no professor-facing exposure. A web route would need a gate, and the
+only gate that exists is the shared whole-site `SITE_PASSWORD` — which has
+to be handed to the instructor the moment they are onboarded so they can
+see their own course. Putting the distress log behind that same password
+would silently grant them access to every student's crisis disclosure at
+the same moment, coupling two entirely different privileges to one secret.
+A local script has no web surface at all and is gated by possession of
+`SUPABASE_SECRET_KEY`, which only the operator holds. That is genuinely
+admin-only without inventing an auth system, and it cannot be reached by
+anyone who merely knows a URL.
+
+It is also the operational half of the commitment in
+`distress_log_reader_email` / `distress_log_review_interval_hours`: those
+fields record who promised to look and how often, and this is the thing
+they run.
+
+Shows events newest first with course name, level, truncated student id or
+`anonymous`, and the message; renders purged rows distinctly as
+`[message purged per retention policy]` rather than as empty; totals by
+level; flags the **pattern threshold** (3+ events at `possible_risk` or
+above, same student, same course, within 7 days); and notes how many events
+came from anonymous sessions that cannot be pattern-tracked or followed up.
+Filters: `--since`, `--level`, `--course`, `--limit`. Carries a header
+warning that its output is FERPA-relevant student disclosure and should not
+be pasted into shared channels.
+
+**Verified with temporary seeded rows** covering all five behaviours
+(listing, purged-message rendering, anonymous rendering, pattern
+detection firing at exactly 3, and level/date filtering), then deleted;
+`distress_events` confirmed back to **0 rows**.
+
+**Not started, deliberately:** any detection of categories beyond the
+current five distress levels. That decision is pending and will arrive as a
+separate, explicitly scoped request once the owner has settled which
+category comes first and what the correct downstream response for it is.
+
+**Stage 2 response-layer work remains unbuilt** and is now unblocked on
+inputs: 988 confirmed for levels 3 and 4, secrecy-caveat placement
+confirmed, escalation recipient set. What is left to build is the two
+BeThe1To-sourced fixed texts, the first-versus-repeat crisis distinction,
+the constrained level 2 generation, the level 3 pattern notification, and
+the delivery channel (still no mail dependency in the project).
 1. **Who is the designated responsible party for MKTG365?** Same
    instructor conversation already planned for the topic-listing feature.
    Until someone has actually agreed, escalation stays disabled and the
