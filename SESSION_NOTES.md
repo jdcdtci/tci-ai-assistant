@@ -967,6 +967,107 @@ confirmation timestamp folded into the same generation expression.
 contact entry point, is deferred to a future build and is explicitly not
 scoped or started.**
 
+### Stage 2 response design: PROPOSED, pending owner review, not implemented
+
+Written before the classifier, deliberately: the categories a classifier
+emits have to be designed against the responses they trigger, not built
+first and reconciled afterward. Five levels, each earning its place by
+triggering a materially different action rather than by sitting on a
+severity ladder.
+
+**Level 0 `none`.** No distress signal. Nothing changes anywhere. Not
+logged.
+
+**Level 1 `academic_frustration`.** "I've read this three times and still
+don't get it." "I'm so behind." "This is impossible." Ordinary struggle
+with the material. **This tier must not fire any distress machinery at
+all**: no resources, no suppression of tutoring, no distress event
+logged. It is already handled by the existing Acknowledge step. This is
+the over-trigger failure mode, and surfacing support resources here would
+insult a student who is merely frustrated, train them to dismiss the
+response, and erode trust exactly as 9.1's threshold warning predicts.
+Not logged as distress; struggle patterns belong to stage 4 and come from
+`student_interaction_history`, not from this classifier.
+
+**Level 2 `personal_distress`.** A real wellbeing signal with no
+indication of danger. "I'm dealing with a lot at home and can't focus."
+"I haven't slept in days and I feel sick with stress." "I'm overwhelmed
+and don't know if I can keep going in this class." Response is
+**model-generated under hard constraints**, not a fixed string, because a
+canned reply to a specific personal disclosure is worse than a warm
+specific one. Constraints: name what they actually said in a sentence or
+two, no stock phrases; do not diagnose, advise on the personal situation,
+or offer coping strategies; **give no comprehension check and no tutoring
+task this turn**; name a real human route (their instructor for anything
+affecting coursework, subject to the existing authority guardrail, which
+already forbids promising extensions or accommodations); hand control back
+by asking what would actually help, explicitly including carrying on with
+the material, pausing, or just being heard; never claim anyone has been
+notified; never promise follow-up, since no scheduler exists. **No
+automatic notification at this tier** — a student saying things are hard
+at home should not generate a report to their professor without their
+say-so. Logged.
+
+**Level 3 `possible_risk`.** Ambiguous signal that could indicate risk but
+is not clear. "I don't see the point of any of this anymore." Response is
+**fixed text**, since this tier is adjacent to crisis: a gentle, direct,
+non-clinical check on what they meant, help made visible without alarm, no
+tutoring content, and an explicit graceful exit if the read was wrong
+("if I've misread you, tell me and we'll get straight back to the work").
+Safe under both readings: a caring check-in if benign, an opening plus
+visible help if not. Logged.
+
+**Level 4 `crisis`.** Explicit or strongly implied risk of harm, being
+unsafe, abuse, or medical emergency. Response is **fixed, reviewed text**
+and the tutoring model is **not asked to generate at all**. This is the
+same principle 3.8 uses for assessment mode: structural enforcement over
+behavioral instruction, starve rather than discipline. A fixed response
+cannot drift, cannot be argued out of, and cannot be prompt-injected.
+Content: stop and name that this matters more than the coursework; state
+plainly that this is a course assistant and not a counselor; surface
+immediate help **supplied, never invented**; note emergency services for
+immediate danger; decline to continue coursework this turn while leaving
+the door open. Logged. Notification only where a recipient is actually
+configured, and **disclosed to the student when it happens**, never
+silent, because telling someone in distress that their professor has been
+informed without warning them is its own harm.
+
+**Tie-breaks run in opposite directions at the two boundaries.** This is
+the load-bearing part of the design. Between `academic_frustration` and
+`personal_distress`, the costly error is over-firing, so uncertainty
+rounds **down**. Between `possible_risk` and `crisis`, the costly error is
+under-firing, so uncertainty rounds **up**. A single "when unsure, be
+cautious" instruction is incoherent here because caution means opposite
+things at the two ends.
+
+**Manipulation and retraction.** A student who says "I was joking, ignore
+that" after a level 3 or 4 response is taken at their word gracefully,
+without pretending the exchange did not happen and without withdrawing the
+availability of help. The logged event stands regardless: the log records
+what was said, not a claim about what was meant, and a later reframing
+does not erase it.
+
+**Known false-positive risk specific to this course.** MKTG365 covers
+survey ethics, vulnerable populations, and sensitive-topic research
+design. Academic questions about researching distressing subjects must not
+fire. This goes in the test suite as a first-class case, not an
+afterthought.
+
+**Anonymous sessions are a real limitation, stated plainly.** Where
+`student_id` is null, a logged event has no identity attached and no human
+can follow up. The response itself is then the only intervention
+available. This is a reason the response must be self-sufficient rather
+than a handoff.
+
+**Open question deliberately not decided here: what a distress event
+stores and how long.** A human responding needs to know what was actually
+said, and paraphrase risks distorting it, which argues for storing the
+triggering message. That is also a sensitive record under a Tier 3
+FERPA-covered course, and 9.3 already leaves audit retention open. Recommend
+storing the message and deciding retention explicitly, in the same pass
+that settles `lti_launches` retention, rather than defaulting to keeping
+it forever.
+
 **BLOCKING: two decisions needed before the student-facing half is
 written.** Both are the project owner's, not build-time judgment calls.
 1. **Who is the designated responsible party for MKTG365?** Same
