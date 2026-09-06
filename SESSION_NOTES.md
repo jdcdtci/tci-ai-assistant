@@ -821,6 +821,104 @@ Stage 2 (distress-signal detection) has NOT been started. Stage 1 is now
 closed and the assessment-scope leak above is fixed, so stage 2 is the
 next thing to begin.
 
+### Stage 2 (distress-signal detection): STARTED, design blocked on one decision
+
+Research done 2026-09-05, before writing any code. The detection half is
+straightforward. The routing half cannot be completed as specified, and
+the reason is structural rather than a matter of effort.
+
+**What the spec requires.** 3.6: an interaction showing "signs of
+distress, crisis, or a wellbeing concern... routes to the appropriate
+human channel immediately and is never handled by the assistant alone."
+9.1 names the detection mechanism as "the single highest-priority open
+item in this document" and warns specifically against assuming "that the
+model will simply notice," on the chosen runtime model.
+
+**Finding 1: there is no escalation code anywhere in this project.** A
+repo-wide search for "escalat" across all TypeScript returns exactly one
+hit, and it is a comment in `lib/persona.ts`. `courses.escalation_enabled`
+and `courses.escalation_recipient_email`, plus the DB CHECK tying them
+together, are configuration with **no consumer**. This is the same shape
+of defect the spec itself calls out for `answer_bearing`: a control that
+looks satisfied on the surface while doing nothing underneath. Escalation
+is currently unimplemented in full, not merely unimplemented for distress.
+
+**Finding 2: MKTG365 has no designated responsible party.**
+`escalation_enabled = false`, `escalation_recipient_email = null`. Per
+12.2a a for-credit course with a professor of record should default to
+escalation *enabled*, since that responsible party exists structurally, so
+this is misconfigured relative to spec intent. It is correctly disabled in
+the sense that nobody has actually agreed to receive anything yet, which
+is the state 12.2a insists on until a real person opts in.
+
+**Why that blocks the routing half rather than merely delaying it.** The
+risk register is explicit that a course with escalation enabled and no
+real designated recipient means "a student in distress... is told help is
+available when no one is actually obligated to respond, creating the
+appearance of a safety net that does not exist, **which is worse than no
+escalation at all**." So the failure mode here is not "escalation does not
+work yet." It is that a plausible-looking implementation would actively
+make things worse by implying a safety net. Nothing in the student-facing
+response may claim a human has been notified unless one actually has.
+
+**Finding 3: no delivery capability exists.** `package.json` has no mail
+or notification dependency, so even given a recipient address there is no
+channel to deliver on. That is a new dependency plus a credential, not a
+code change. Spec 9.3 already lists the delivery channel as open, for the
+proactive check-in feature; the same gap applies here.
+
+**Finding 4 (raise with the spec, not just the build): 3.6 bundles two
+different routing problems under one word.** For an academic matter (an
+extension, a grade dispute, an out-of-scope question) the appropriate
+human is the faculty of record, and an email arriving whenever they next
+read it is fine. For an acute wellbeing crisis, a marketing professor's
+inbox is not "the appropriate human channel": delivery is asynchronous,
+possibly overnight or across a weekend, and the latency is itself the
+hazard. These need different routing, and treating them as one mechanism
+is how a crisis response ends up with faculty-email latency. A
+consequence worth noting: the part of a crisis response that surfaces
+immediate, always-available help does **not** depend on TCI designating
+anyone, and is therefore not blocked by Finding 2.
+
+**Design decided (not blocked, will not change based on the open
+questions).**
+- Detection is a **dedicated classifier call**, not the main tutoring
+  model noticing, per 9.1's explicit warning. Same shape as
+  `isFollowUpOnTopic`: its own Claude call with a forced tool call.
+- It must run **before the tutoring response is returned and must be able
+  to replace it**, unlike `classifyExchange`, which runs in `after()`
+  precisely because it may not affect the answer. Run it concurrently
+  with retrieval so it costs latency only, not a serialized round trip.
+- It must run for **anonymous students too**, so it cannot depend on
+  `student_id` the way the memory write path does.
+- Distress events get their **own table**, not
+  `student_interaction_history`, whose columns (`concept`,
+  `comprehension_check_passed`) are shaped for comprehension tracking and
+  carry a `not null student_id` that anonymous callers cannot satisfy.
+  New table follows the standing convention: RLS enabled, default-deny,
+  service-role-only policy, confirmed via `pg_policies`.
+- Classification is **graded, not binary**. A binary crisis flag either
+  fires on ordinary exam stress, which over-triggers and erodes trust per
+  9.1's own threshold warning, or is tuned so high it misses. Ordinary
+  academic frustration must not fire at all; it is already handled by the
+  Acknowledge step.
+- **Testing is part of the deliverable**, per 9.1's "deliberate design and
+  testing." Test set spans clear crisis, ambiguous distress, ordinary
+  academic frustration that must not fire, and attempts to talk the
+  assistant out of responding.
+
+**BLOCKING: two decisions needed before the student-facing half is
+written.** Both are the project owner's, not build-time judgment calls.
+1. **Who is the designated responsible party for MKTG365?** Same
+   instructor conversation already planned for the topic-listing feature.
+   Until someone has actually agreed, escalation stays disabled and the
+   response must not imply otherwise.
+2. **What immediate help should the response surface?** This is
+   region and institution specific. A verifiable public crisis line can be
+   stated safely; an institutional counseling number **must be supplied,
+   never invented**, since a fabricated or stale number given to a student
+   in crisis is the worst possible failure of this feature.
+
 ### Assessment scope leak: CLOSED (separate from the blocked feature below)
 
 A standing, present-tense guardrail gap on a live for-credit course, found
