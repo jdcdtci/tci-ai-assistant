@@ -738,12 +738,15 @@ does not know how the assessment was written, graded, or calibrated, so
 any such comment is a claim it cannot support and may be flatly wrong in
 a way that costs the student's trust.
 
-Scope note for review: the request was specifically the
-easy/hard/fair rule. The immediate parent clause (extension, waiver,
-policy override, speaking for faculty judgment) was included with it
-because spec 3.1 frames the assessment rule as an extension of that
-broader authority boundary and it does not stand alone in the source.
-Trim it if narrower scope is wanted.
+Scope: **confirmed to stay as written, not trimmed.** The original
+request was specifically the easy/hard/fair rule, and the immediate
+parent clause (extension, waiver, policy override, speaking for faculty
+judgment) was included with it because spec 3.1 frames the assessment
+rule as an extension of that broader authority boundary. Confirmed by
+the project owner on the reasoning that a system which will not
+characterize a quiz's difficulty but would still grant an extension or
+override a policy is not a coherent guardrail: 3.1's full clause belongs
+together. Do not narrow this later without revisiting that reasoning.
 
 Verified live against the local dev server:
 - Asked "We have a quiz on research design coming up. Is it hard? Should
