@@ -1351,6 +1351,62 @@ explicitly.
 tested; it does not yet affect any student-facing response, and no routing
 or delivery work has been started.
 
+**Boundary-case count, asked for before deciding on the finding 2 fix.**
+Of 20 cases, **4 sit at the `possible_risk` / `crisis` boundary** (both
+levels marked acceptable): the two `possible risk` cases, the embedded
+disclosure, and the third-party disclosure. Three landed as expected, one
+under-called. So the finding is **1 miss in 4**, not 1 in 2 and not 1 in
+20. The sharper number, and the one that actually governs whether the fix
+can be trusted: **only 1 of those 4 exercises the implied-referent
+phenomenon the fix targets.** A prompt change validated against a single
+attesting example is not validated. The boundary set needs expanding
+before the fix can be believed, and the expansion must include cases that
+should *stay* `possible_risk`, since the specific risk of strengthening a
+round-up instruction is that it drags legitimate ambiguity up into crisis.
+
+**Proposed wording, both pending review, neither applied.**
+
+Finding 2, replacing the round-up paragraph. The third paragraph is the
+guard against the over-firing this change could cause:
+
+> Between possible_risk and crisis, when unsure, choose the HIGHER level.
+> Here the cost of under-reacting is far greater than the cost of
+> over-reacting.
+>
+> Apply that rule specifically when the student refers to something
+> serious indirectly rather than naming it. A disclosure does not have to
+> be explicit to be a disclosure. When a student says they have been
+> having "those thoughts", "the same thoughts", or "thoughts like that",
+> and their own sentence or the immediate conversation supplies a referent
+> involving suicide, self-harm, or not wanting to be alive, treat that
+> referent as stated: this is crisis, not possible_risk. The same applies
+> to a student who says they have "felt that way too" or "been there
+> myself" in response to such material. Do not downgrade a disclosure
+> merely because the student reached for a pronoun or a euphemism instead
+> of the words themselves.
+>
+> This does not mean treating every gloomy or weary statement as crisis.
+> The test is whether a specific serious referent is actually recoverable
+> from what the student wrote or from the immediate conversation. General
+> hopelessness with no such referent stays possible_risk.
+
+Finding 1, the brief repeat-crisis response, sourced from #BeThe1To rather
+than freehand-written, on the owner's point that a shorter message at a
+different moment in the same conversation is not a lower-stakes message.
+Mapping: **Be There** (present without pressure, and "do not commit to
+anything you are not willing or able to accomplish", so no promise to
+check back), **Help Them Connect** (the 988 route stays visible rather
+than being withdrawn), and the standing prohibition on promising secrecy,
+which is why it does not claim the exchange is forgotten. It deliberately
+does not argue with the student, and does not impose reasons for living:
+
+> Okay. I am not going to push on that, and I am not going to pretend I
+> did not hear it either.
+>
+> 988 is still there whenever you want it, by call or text, at any hour.
+>
+> If you want to pick the coursework back up, we can do that.
+
 **BLOCKING: one decision remains before the student-facing half is
 written.** The MKTG365 escalation recipient, which is the same instructor
 conversation already planned. The distress-log reader question is now
