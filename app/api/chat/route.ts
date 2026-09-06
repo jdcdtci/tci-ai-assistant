@@ -4,7 +4,8 @@ import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
 import { embed } from "@/lib/voyage";
 import { getSupabaseServiceClient } from "@/lib/supabase";
-import { classifyExchange, type Turn } from "@/lib/classify";
+import { type Turn } from "@/lib/classify";
+import { recordExchange, recordMemoryWriteFailure } from "@/lib/memory";
 import { buildVoiceSection } from "@/lib/persona";
 import { classifyDistress, LOGGABLE_LEVELS, type DistressClassification } from "@/lib/distress";
 import {
@@ -488,6 +489,7 @@ export async function POST(request: NextRequest) {
     after(async () => {
       try {
         await recordExchange({
+          anthropic,
           supabase,
           studentId: student_id,
           courseId: course_id,
@@ -496,119 +498,18 @@ export async function POST(request: NextRequest) {
           assistantResponse: text,
         });
       } catch (err) {
-        console.error("[memory] failed to record exchange:", err);
+        // Backstop only. recordExchange records its own failures durably;
+        // this catches anything that escapes it, and records that too rather
+        // than leaving a console line as the sole trace inside after().
+        await recordMemoryWriteFailure(supabase, {
+          studentId: student_id,
+          courseId: course_id,
+          reason: "exception",
+          detail: err instanceof Error ? err.message : String(err),
+        });
       }
     });
   }
 
   return NextResponse.json({ response: text });
-}
-
-type RecordExchangeArgs = {
-  supabase: ReturnType<typeof getSupabaseServiceClient>;
-  studentId: string;
-  courseId: string;
-  priorTurns: Turn[];
-  latestUser: string;
-  assistantResponse: string;
-};
-
-async function recordExchange({
-  supabase,
-  studentId,
-  courseId,
-  priorTurns,
-  latestUser,
-  assistantResponse,
-}: RecordExchangeArgs) {
-  const classification = await classifyExchange(anthropic, priorTurns, latestUser, assistantResponse);
-
-  if (!classification) {
-    console.error("[memory] classifier returned no result; skipping write");
-    return;
-  }
-
-  const {
-    concept,
-    current_response_has_check,
-    check_concept,
-    prior_check_verdict,
-    prior_check_concept,
-    rationale,
-  } = classification;
-
-  // A row that carries a check will later be stamped with that check's
-  // verdict, so it must be labelled with what the check tests, not with
-  // whatever the turn mostly explained. Otherwise the concept and the
-  // verdict end up describing two different moments.
-  const rowConcept = (current_response_has_check && check_concept) || concept;
-
-  // The rationale is deliberately logged rather than stored: the table
-  // schema stays as specified, but the judgment behind each row is
-  // recoverable here if the data ever looks inconsistent.
-  console.log(
-    `[memory] student=${studentId} concept="${rowConcept}" check_asked=${current_response_has_check} prior_verdict=${prior_check_verdict} :: ${rationale}`,
-  );
-
-  // A verdict resolves the PREVIOUS turn's row, which is stored with a
-  // null result. Per the documented rule in lib/classify.ts, a verdict can
-  // come from an answered explicit check or from a voluntary demonstration
-  // of understanding; either way it judges the previous turn's content.
-  // Exactly one row is written per turn, so the previous turn's row is
-  // simply the most recent one; matching on "most recent unresolved row"
-  // instead would skip past turns that legitimately had no check.
-  if (prior_check_verdict !== "none") {
-    const { data: priorRow, error: lookupError } = await supabase
-      .from("student_interaction_history")
-      .select("id, concept, comprehension_check_passed")
-      .eq("student_id", studentId)
-      .eq("course_id", courseId)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (lookupError) {
-      console.error("[memory] failed to look up prior row:", lookupError.message);
-    } else if (!priorRow) {
-      console.warn("[memory] verdict reported but no prior row exists; skipping resolve");
-    } else if (priorRow.comprehension_check_passed !== null) {
-      console.warn(
-        `[memory] verdict reported but most recent row ${priorRow.id} is already resolved; skipping to avoid overwriting`,
-      );
-    } else {
-      // Re-stamp the concept from the check itself. The row was labelled
-      // when the check was posed; this corrects it if that label drifted.
-      const resolvedConcept = prior_check_concept ?? priorRow.concept;
-
-      const { error: updateError } = await supabase
-        .from("student_interaction_history")
-        .update({
-          comprehension_check_passed: prior_check_verdict === "passed",
-          concept: resolvedConcept,
-        })
-        .eq("id", priorRow.id);
-
-      if (updateError) {
-        console.error("[memory] failed to update prior row:", updateError.message);
-      } else {
-        const corrected = resolvedConcept !== priorRow.concept;
-        console.log(
-          `[memory] resolved prior check on row ${priorRow.id} as ${prior_check_verdict}, concept="${resolvedConcept}"` +
-            (corrected ? ` (corrected from "${priorRow.concept}")` : ""),
-        );
-      }
-    }
-  }
-
-  const { error: insertError } = await supabase.from("student_interaction_history").insert({
-    student_id: studentId,
-    course_id: courseId,
-    concept: rowConcept,
-    // Stays null until the student's next message lets the check be judged.
-    comprehension_check_passed: null,
-  });
-
-  if (insertError) {
-    console.error("[memory] failed to insert row:", insertError.message);
-  }
 }

@@ -1661,6 +1661,64 @@ vary; or accept the template and convert everything after the first clause
 into fixed text, which would at least be honest about what it is. This
 needs a decision, not another instruction.
 
+### Memory-write failures are now durable data, not log output
+
+Closes the last open question of stage 2, and fixes a defect of the same
+class as the two found earlier tonight.
+
+**The gap.** `recordExchange` runs inside `after()`. When it declined to
+write an interaction-history row, it said so only through `console.error`.
+Locally that reaches a TTY that survives while a window stays open; on
+Vercel it reaches a log drain nobody reads. So a memory write that silently
+did not happen left no trace anyone could find afterward.
+
+**How the gap proved itself.** Answering "did tonight's memory write
+silently skip?" came down to reading the dev server's terminal scrollback.
+`lsof` confirmed the process had stdout and stderr on `/dev/ttys003`, a TTY,
+with no log file anywhere. The answer was retrievable only because that
+window happened to still be open with enough history. Had it been closed,
+the question would have been **permanently unanswerable**. That is the
+definition of evidence that depends on someone watching at the right moment.
+
+**The fix: `memory_write_failures`** (migration `20260906061500`). A table
+rather than a marker column, because the failure being recorded is the
+*absence* of a row, and there is no row to mark. Columns: `student_id`
+(never null here, unlike `distress_events`), `course_id` (FK,
+`on delete restrict`), `reason` (`classifier_returned_null` / `exception` /
+`insert_failed`), `detail` (system error text only, truncated at 500
+characters), `created_at`. **No message content is stored**: the point is to
+know a write was lost, not to reconstruct it. RLS verified live: enabled,
+one `service_role` policy, default-deny. Retention enforced by a second
+`pg_cron` job at 180 days, matching the metadata tier of `distress_events`;
+two active jobs now.
+
+**Three silent paths now record durably**, where previously all three only
+logged: the classifier returning without a tool call, the classifier
+throwing, and the history insert itself failing. The route's outer `catch`
+is kept as a backstop and now records too rather than logging alone.
+`recordMemoryWriteFailure` never throws; if its own insert fails it falls
+back to console output as a genuine last resort rather than as the primary
+mechanism.
+
+**Refactor:** the memory path moved from `app/api/chat/route.ts` into
+`lib/memory.ts`, so its failure modes can be driven directly by a test
+rather than only observed in passing. `anthropic` is now passed in rather
+than closed over, which is what makes injection possible.
+
+**Forced-failure test** (`scripts/test-memory-failure-path.ts`), built the
+same way the distress one was: the classifier is made to fail *for real*
+rather than stubbed. Scenario 1 supplies a client whose response contains no
+`tool_use` block, which is exactly the condition `classifyExchange` returns
+null on, so the genuine null branch executes. Scenario 2 supplies a client
+that throws. Four assertions per scenario, all passing: exactly one failure
+row recorded, the reason is correct, the row carries student and course, and
+**no history row was written**. The thrown error's text was captured in
+`detail`. Test data cleaned up by the test itself.
+
+**Regression after the refactor:** a real content question through the live
+route returned a grounded 1,159-character answer and wrote a proper history
+row, with zero failure rows. The extraction did not break the happy path.
+
 ### Level 2 converted: generated reflection plus fixed text
 
 Resolution of the templating finding above. The three moves that were
