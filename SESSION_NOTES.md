@@ -812,7 +812,15 @@ Everything else in stage 1 and the guardrail patch is verified. Stage 2
 (distress-signal detection) has NOT been started, because stage 1 was
 gated on this UI test.
 
-### Captured feature request: assessment-scope clarifying sequence (NOT scheduled)
+### Captured feature request: assessment-scope clarifying sequence (BLOCKED, do not build)
+
+> **Status: blocked on two items, neither of which is a build-time
+> judgment call.** (1) The feature cannot meet spec 3.8's system-reported
+> assessment context requirement without new infrastructure that does not
+> exist. (2) Whether it should exist in MKTG365 at all is MKTG365's
+> instructor's decision and has not been made. Both are detailed below.
+> Do not begin any part of this, including targeted-lookup work framed as
+> preparation.
 
 Requested 2026-09-05: after a student asks about a quiz, test, or
 assignment, the assistant should (1) ask which one is coming up, (2) ask
@@ -856,7 +864,89 @@ assistant cannot validate the answer, cannot know whether a named
 assessment exists, and the scope blocks do not appear to carry
 student-facing assessment names to match against.
 
-**Why it should wait for stage 2, on the project's own gating logic.**
+**BLOCKING ITEM 1: this feature cannot meet spec 3.8 without new
+infrastructure. Correction to earlier analysis in this same entry.**
+The self-reported assessment identity problem was first framed here as
+something a targeted lookup would solve. That was wrong, and the
+correction matters more than the original point. Targeted lookup solves
+"does "Quiz 3" reach the right scope block." It does nothing about
+whether there is a Quiz 3, whether it is upcoming, or whether it is this
+student's. A flawless lookup still hands over real assessment content on
+the strength of an unverified student claim. **Do not build the lookup as
+a fix for this.**
+
+What 3.8 literally says: assessment mode "is not a judgment the assistant
+makes. It is a context flag the system already knows and truthfully
+reports," with "the source of truth is the LMS, not the model's
+inference," carried on the normalized context object as a field
+"reported by the system, never inferred by the assistant." Note precisely
+what that covers: 3.8 defines a **boolean** (is this student inside a
+live assessment right now) governing a restrictive mode. It does not
+literally define an assessment **identity and timing** signal (which
+assessment, and is it genuinely upcoming for this student). Extending
+3.8's principle to identity and timing is a correct extension, and
+arguably binds harder here, since this feature *discloses* content on the
+strength of the claim rather than merely restricting behavior. But it is
+an extension of the stated rule to a case the spec does not literally
+address, and the spec would be better for saying so explicitly.
+
+**What would actually constitute a system-reported signal, assessed
+honestly:**
+- **LTI launch context (spec 6.8) is the canonical source.** Canvas
+  reports graded-assignment context at launch via `resource_link`,
+  `message_type`, and custom claims: signed, LMS-sourced, not student
+  asserted. This is exactly what the paused Phase 3 `lti_launches` table
+  was designed to carry. Two limits: Phase 3 is paused and unbuilt, and
+  even once built a launch reports *the context the student launched
+  from*, which is close to 3.8's boolean. It does not report "Quiz 3 is
+  due Friday."
+- **An assessments table with authoritative identity and timing.** Would
+  need assessment id, student-facing name, course, open/due dates, and a
+  link to its scope block(s), populated from authoritative course data
+  rather than student claims, plus a clock to resolve "upcoming." **No
+  such table exists**; the schema is only `courses`, `enrollments`,
+  `knowledge_chunks`, `knowledge_documents`,
+  `student_interaction_history`. Even with it, "upcoming *for this
+  student*" depends on section, enrollment dates, and any individual
+  extension or accommodation, so a single course-level due date is an
+  approximation that can be wrong for a given student.
+- **LMS assignment/schedule data via LTI Advantage (AGS).** Genuinely
+  authoritative, and explicitly out of scope: the Phase 3 plan turns AGS
+  and NRPS off, and grade passback sits behind the Section 5 wall.
+
+**Plain answer: no system-reported signal about assessment identity or
+timing exists anywhere in this system today, and none can be obtained
+without new infrastructure.** Everything currently available is student
+self-report. This is not a prompt change and not a retrieval change. It
+requires a new data model for assessments including timing, an
+authoritative population path for it, linkage from assessments to scope
+blocks, and realistically the 3.8 assessment-mode flag itself. That is
+comparable in size to stage 4's scheduler work, not to stage 1.
+
+**Related hazard found while assessing this: assessment mode does not
+exist yet.** Because the 3.8 flag is unbuilt, nothing currently prevents
+a student who is *inside* a live quiz from asking "what topics are on my
+upcoming quiz" and receiving a scope listing mid-assessment. Scope
+disclosure during a live assessment is a real narrowing aid: knowing a
+quiz covers "internal validity threats: history, maturation, selection
+bias, mortality, testing effects, and instrumentation" while sitting in
+that quiz is meaningful help. So this feature interacts badly with the
+absence of assessment mode, independent of the self-report problem.
+
+**BLOCKING ITEM 2: whether this feature should exist in MKTG365 at all is
+the instructor's decision, and it has not been made.** Whether the
+assistant should proactively surface assessment scope to students on its
+own initiative, unprompted by a student naming a specific worry, is a
+real pedagogical and course-policy decision with a real owner who is not
+in the build conversation. The project owner is raising it with MKTG365's
+instructor separately. **Until that answer comes back, this stays fully
+unbuilt, not partially built and waiting.** Specifically: do not start the
+targeted-lookup work as preparation. Neither blocker is a sequencing
+question to be resolved when convenient, and neither is the build
+decision of whoever picks this up next.
+
+**Why timing would also matter, on the project's own gating logic
+(secondary to both blockers above).**
 Step 2 of the sequence literally asks the student what they are *worried*
 about, which deliberately steers conversations toward expressions of
 worry and anxiety. That is the exact signal class spec 9.1's
