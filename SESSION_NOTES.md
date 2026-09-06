@@ -714,11 +714,108 @@ Also note the Upstash credentials (`KV_REST_API_*`) live in
 `.env.development.local`, not `.env.local`, which is why local
 `/api/chat` works despite those names being absent from the latter.
 
-**Not done, deliberately, and flagged so it is not lost.** Spec 3.1's
-"warmth without authority" rule (the assistant must never characterize
-how easy, hard, or fair an upcoming graded assessment will be, since that
-is an unearned claim of authority no different in kind from implying it
-could grant an extension) is **not currently in the system prompt at
-all**. It was left alone here because it is a capability boundary, not
-voice, and stage 1 was scoped to cosmetic changes only. It belongs to
-guardrail work, and it is a real current gap, not a future nicety.
+**Not done in the persona pass, deliberately.** Spec 3.1's "warmth
+without authority" rule was left out of stage 1 because it is a
+capability boundary, not voice, and stage 1 was scoped to cosmetic
+changes only. It was patched separately immediately afterward, see below.
+
+### Warmth-without-authority guardrail: PATCHED and verified
+
+Done as its own small piece of work rather than folded into stage 2,
+because it was a live gap on a real for-credit course with real students
+and is a prompt-level guardrail fix, not new infrastructure.
+
+Added to `SYSTEM_PROMPT` in `app/api/chat/route.ts`, as its own paragraph
+in the engine rules ahead of the tutoring pattern (it is a boundary, not
+a pattern step): the assistant has no authority over any part of the
+course beyond explaining its material; never suggests it can grant an
+extension, waive a requirement, override a policy, or speak for the
+instructor's judgment on a grade or accommodation; and specifically never
+characterizes how easy, hard, or fair an upcoming graded assessment will
+be, nor reassures a student about how a quiz, exam, or assignment is
+likely to go. Rationale is stated inside the prompt itself: the assistant
+does not know how the assessment was written, graded, or calibrated, so
+any such comment is a claim it cannot support and may be flatly wrong in
+a way that costs the student's trust.
+
+Scope note for review: the request was specifically the
+easy/hard/fair rule. The immediate parent clause (extension, waiver,
+policy override, speaking for faculty judgment) was included with it
+because spec 3.1 frames the assessment rule as an extension of that
+broader authority boundary and it does not stand alone in the source.
+Trim it if narrower scope is wanted.
+
+Verified live against the local dev server:
+- Asked "We have a quiz on research design coming up. Is it hard? Should
+  I be worried about it?" The response declined to characterize
+  difficulty or grading, said plainly that only the instructor can speak
+  to that, noted that a guess from it would not be worth trusting,
+  offered to work through the material, and still closed with a real
+  construction check. Warm, and without borrowed authority.
+- Regression against over-firing: "What is the difference between
+  internal and external validity?" still returned a full, grounded,
+  substantive answer. The new paragraph does not make ordinary content
+  questions evasive.
+
+### Persona name audit (explicitly run, not inferred)
+
+Asked for directly, and worth recording that the check had NOT been run
+when stage 1 was first reported: the voices were authored without names
+and with an explicit no-name instruction, but that is authorship, not
+verification. The audit has now actually been run against the string
+contents:
+- "Nancy" occurs exactly once repo-wide, in a **code comment** at
+  `lib/persona.ts:32` quoting spec 9.4's open question. It is not inside
+  any string and never reaches the model.
+- Every capitalized word inside the three voice strings is sentence
+  initial (Address, Draw, Favor, Ground, Keep, Prefer, Sound, Stay, They,
+  Treat, Use, You). `Program` and `Record` appear only in the TypeScript
+  type annotation `Record<Program, string>` on the declaration line, not
+  in prompt text.
+- Same for the shared assembled block; `DB` and `JSON` come from a
+  comment and from `JSON.stringify` in the warning path.
+- The explicit instruction is present: no personal name, refer to
+  yourself as the course assistant, do not adopt or invent one even if a
+  student offers.
+**Result: no proper name exists in any of the three voices.**
+
+### Stage 1 is NOT fully closed: the signed-in UI test is blocked on the owner
+
+Attempted this session and genuinely blocked, not skipped. The chat
+screen requires a Google sign-in. In the automated browser, clicking
+"Sign in with Google" correctly redirects to Google's OAuth page for the
+Supabase project, and that page presents a full credential form: email,
+password, **and a CAPTCHA**. There is no existing Google session in that
+browser and no account chooser. Entering credentials and completing
+CAPTCHAs are both off limits, so this cannot be finished without the
+owner. The separate real-Chrome surface is not a workaround either: it
+cannot reach the local dev server at all (different network context).
+
+**To finish it (about two minutes, needs a human at the keyboard):**
+
+```
+SITE_PASSWORD= npm run dev
+```
+
+Then at http://localhost:3000 : sign in with Google, enter join code
+`A4D3KAWR` for MKTG365, and send two messages. First, any ordinary
+content question, confirming a normal grounded answer arrives in the
+chat UI (this is the rule 1 check that the persona work and the course
+lookup did not break the real interface). Second, "Is the upcoming quiz
+hard?", confirming the new authority guardrail holds in the UI exactly
+as it did against the API.
+
+Everything else in stage 1 and the guardrail patch is verified. Stage 2
+(distress-signal detection) has NOT been started, because stage 1 was
+gated on this UI test.
+
+**Local testing note (repeat, because it will come up every time).**
+`SITE_PASSWORD` is set in `.env.local`, so the whole-site gate is active
+locally and blocks automated browser testing. The `SITE_PASSWORD= `
+prefix above disables it for that one process (the middleware no-ops on
+an empty value), touching no file and leaving production unaffected.
+`.claude/launch.json` was temporarily pointed at that command during
+testing and has been restored to its original contents both times.
+The Upstash credentials (`KV_REST_API_*`) live in
+`.env.development.local`, not `.env.local`, which is why local
+`/api/chat` works despite those names being absent from the latter.
