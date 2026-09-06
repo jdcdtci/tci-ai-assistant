@@ -227,10 +227,36 @@ const PATTERN_LEVELS = ["possible_risk", "crisis"];
 const PATTERN_COUNT = 3;
 const PATTERN_WINDOW_DAYS = 7;
 
+// True when a classification must be answered with its designated response
+// regardless of session or entitlement. Defined once, here, so the override
+// boundary exists in exactly one place rather than being re-derived at each
+// call site and drifting.
+//
+// THE BOUNDARY, AND WHY IT SITS EXACTLY HERE
+//
+// These responses are safe to serve to an unentitled or signed-out caller
+// because none of them depends on retrieval or exposes course content:
+// crisis and possible_risk are fixed strings, and personal_distress is a
+// reflection of the student's own words generated with no course material
+// supplied. That is the same reasoning that already makes access_mode
+// 'public' safe with no session.
+//
+// 'none' and 'academic_frustration' are deliberately NOT here. If they were,
+// any caller could reach ordinary course content by phrasing a message to
+// look like distress, which would trade one real vulnerability for a worse
+// one. Anything not in this list takes the normal entitlement path.
+export function requiresDistressResponse(c: DistressClassification): boolean {
+  return c.interpersonal_harm || LOGGABLE_LEVELS.includes(c.level);
+}
+
 async function recordDistressEvent(
   supabase: ReturnType<typeof getSupabaseServiceClient>,
   args: {
-    course_id: string;
+    // Null when the caller supplied a course_id that did not resolve to a
+    // real course. The event is still recorded: losing a crisis disclosure
+    // because the caller sent a bad course id would be the worst possible
+    // reason to lose a safety record.
+    course_id: string | null;
     student_id: string | null;
     message: string;
     classification: DistressClassification;
@@ -248,7 +274,7 @@ async function recordDistressEvent(
       // occurrence, not the third.
       notification_worthy = true;
       notification_reason = "interpersonal_harm";
-    } else if (student_id && PATTERN_LEVELS.includes(classification.level)) {
+    } else if (student_id && course_id && PATTERN_LEVELS.includes(classification.level)) {
       // Pattern needs identity. Anonymous sessions cannot be linked across
       // events, so for them this can never fire and the in-conversation
       // response is the entire intervention.
@@ -359,7 +385,84 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Could not verify course access right now." }, { status: 503 });
   }
 
+  const priorTurns: Turn[] = Array.isArray(history) ? history.slice(-MAX_HISTORY_TURNS) : [];
+
   if (allowed !== true) {
+    // NOT entitled. Before refusing, classify: a distress signal must be
+    // answered regardless of session or entitlement, because a person in
+    // crisis is a person in crisis whether or not their enrollment is in
+    // order, their session has expired, or they named the wrong course.
+    //
+    // Classification runs here rather than before the entitlement check so
+    // an entitled student's ordinary question keeps the existing parallel
+    // flow and pays no added latency. The cost of this branch is one
+    // classifier call for an unentitled caller, bounded by the per-IP rate
+    // limit already applied at the top of this handler.
+    const refusedDistress = await classifyDistress(anthropic, priorTurns, message);
+
+    if (refusedDistress && requiresDistressResponse(refusedDistress)) {
+      // The caller-supplied course_id is still untrusted here. Resolve it
+      // against real courses; attach it only if it exists, otherwise record
+      // the event with no course association rather than trusting an
+      // unvalidated value or dropping a safety record.
+      const { data: realCourse } = await supabase
+        .from("courses")
+        .select("id")
+        .eq("id", course_id)
+        .maybeSingle();
+
+      await recordDistressEvent(supabase, {
+        course_id: realCourse?.id ?? null,
+        student_id,
+        message,
+        classification: refusedDistress,
+      });
+
+      console.warn(
+        `[access] refused course=${course_id} session=${verifiedEmail ? "yes" : "none"} but served distress response level=${refusedDistress.level} harm=${refusedDistress.interpersonal_harm} course_attached=${realCourse ? "yes" : "no"}`,
+      );
+
+      const fixedForRefused = fixedDistressResponse(refusedDistress.level, {
+        crisisAlreadyRaised: hasCrisisAlreadyBeenRaised(priorTurns),
+        // Deliberately omitted. institutional_crisis_resource is the one
+        // course-derived value in a distress response, and this caller has
+        // not been shown to be entitled to this course. The 988 baseline is
+        // complete and safe on its own, which is exactly why it is the
+        // baseline. Serving it alone keeps the override from becoming a way
+        // to read a course row.
+        institutionalResource: undefined,
+      });
+
+      if (fixedForRefused) {
+        return NextResponse.json({ response: fixedForRefused });
+      }
+
+      // personal_distress: a reflection of the caller's own words plus fixed
+      // text. No course material is supplied, so nothing course-scoped can
+      // leak through it.
+      try {
+        const reflectionReply = await anthropic.messages.create({
+          model: "claude-sonnet-5",
+          max_tokens: 120,
+          system: PERSONAL_DISTRESS_REFLECTION_SYSTEM,
+          messages: [...priorTurns, { role: "user", content: message }],
+        });
+        return NextResponse.json({
+          response: assemblePersonalDistressResponse(
+            reflectionReply.content
+              .filter((block) => block.type === "text")
+              .map((block) => block.text)
+              .join(""),
+          ),
+        });
+      } catch {
+        return NextResponse.json({ response: PERSONAL_DISTRESS_FALLBACK });
+      }
+    }
+
+    // Not a distress signal: the ordinary entitlement rules apply unchanged.
+    // This is the boundary that stops the override from becoming a way to
+    // reach course content by phrasing a message as though it were distress.
     console.warn(
       `[access] refused course=${course_id} session=${verifiedEmail ? "yes" : "none"}`,
     );
@@ -373,7 +476,6 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const priorTurns: Turn[] = Array.isArray(history) ? history.slice(-MAX_HISTORY_TURNS) : [];
 
   // Started immediately and awaited only once a response is about to be
   // produced, so distress detection costs no added latency on the ordinary

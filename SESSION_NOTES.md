@@ -1676,13 +1676,78 @@ session, because that is precisely what `access_mode = 'public'` declares
 course exists, so the branch is unreachable today. Say the word and it
 becomes a hard requirement in all modes.
 
-**Still owed: the trade-off worth knowing.** The access check runs before
-distress classification, so an unentitled or signed-out caller writing a
-crisis message is refused rather than receiving a crisis response. That is
-correct for a stranger, but it also means a genuinely enrolled student whose
-session has expired mid-conversation gets a 401 instead of crisis support.
-The UI sends them to sign-in, so it is recoverable, but it is a real edge and
-is recorded rather than discovered later.
+**The crisis-versus-401 gap this created has since been fixed**; see the
+next section. It is left described here because the sequence matters: the
+entitlement fix introduced it, and it was caught in review of that fix
+rather than in production.
+
+## Distress responses now override the entitlement gate
+
+A message classifying at `personal_distress` or above, or flagging
+`interpersonal_harm`, receives its designated response **regardless of
+session or entitlement**. Previously the access check refused first and
+classification never ran, so a crisis-shaped message from an expired
+session, a wrong course, or no session at all got nothing but a bare 401.
+
+**Why this is safe, and where the boundary sits.** None of these responses
+depends on retrieval or exposes course content: crisis and possible_risk are
+fixed strings, and personal_distress is a reflection of the student's own
+words generated with **no course material supplied**. That is the same
+reasoning that already makes `access_mode = 'public'` safe with no session.
+`none` and `academic_frustration` are deliberately excluded, because
+including them would let any caller reach ordinary course content by
+phrasing a message to look like distress — trading one real vulnerability
+for a worse one. The boundary lives in a single exported predicate,
+`requiresDistressResponse`, so it exists in one place rather than being
+re-derived per call site.
+
+**One leak vector found and closed during the build.**
+`institutional_crisis_resource` is course-derived and is normally appended
+to crisis and possible_risk responses. On the override path it is
+**deliberately omitted**, because the caller has not been shown to be
+entitled to that course. The 988 baseline is complete and safe alone, which
+is precisely why it is the baseline. Without this, the override would have
+become a way to read a column off an arbitrary course row.
+
+**Latency preserved.** Classification runs inside the not-entitled branch
+rather than ahead of the gate, so an entitled student's ordinary question
+keeps the existing parallel flow and pays no added latency. The new cost is
+one classifier call per unentitled request.
+
+**Rate limiting confirmed to still apply**, which matters because the
+classifier now runs on requests that were previously refused before reaching
+it. `ratelimit.limit(ip)` sits at the top of the handler ahead of body
+parsing, so it covers every path. Verified empirically: 12 rapid
+unauthenticated distress-shaped requests returned 200 through request 11 and
+**429 at request 12**.
+
+**Logging on the override path.** Identity is the verified session's id, or
+null when there is none, consistent with existing anonymous handling. The
+caller-supplied `course_id` is still untrusted at that point, so it is
+resolved against real courses first: attached if it exists, recorded as
+**null** if it does not (migration `20260906165500` drops the NOT NULL,
+keeping the FK). The event is never dropped — losing a crisis disclosure
+because the caller sent a bad course id would be the worst possible reason
+to lose a safety record.
+
+**Verified live, six cases without a session:**
+
+| Case | Result |
+|---|---|
+| crisis, real course | **200**, crisis text |
+| crisis, fabricated course | **200**, crisis text, event logged with course NULL |
+| personal_distress | **200**, reflection plus fixed text |
+| interpersonal_harm | **200**, and `notification_worthy=true, reason=interpersonal_harm` on first occurrence |
+| **ordinary question** | **401** unchanged |
+| **academic_frustration** | **401** unchanged |
+
+Those last two are the boundary holding: a struggling-but-not-distressed
+message does not unlock anything.
+
+**Owner UI verification still owed** for the entitled paths, which need a
+real sign-in: an entitled student's ordinary question still working, and an
+unentitled ordinary question with a live session returning 403 rather than
+401.
 
 ## Note: both MKTG365 enrollments were the owner's own test accounts
 
