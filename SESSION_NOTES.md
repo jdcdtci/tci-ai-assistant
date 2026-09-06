@@ -1762,21 +1762,48 @@ signed in 06:32:08, enrolled 06:32:20, and produced **zero** interaction
 history, distress events, and memory-write failures. Both enrollments were
 then deleted and MKTG365 confirmed back to **zero enrollments**.
 
-## DO NOT DEPLOY main UNTIL THE SECTIONS MIGRATION IS APPLIED
+## RESOLVED: sections migration applied and deployed 2026-09-06
 
-As of 2026-09-06, `main` contains the section-aware code but the database
-still has the pre-sections schema. **Deploying `main` in this state breaks
-production**: `/api/chat` would call `can_access_section`, which does not
-exist, and return 503 on every request; `/api/enroll` would query a
-`sections` table that does not exist and 500.
+The "do not deploy main" warning that stood here is retracted. Schema and
+deployed code agree; `main` is safe to deploy again.
 
-This intermediate state is deliberate. The sequencing requires the code to
-be committed and build-ready *before* the migration runs, so the deploy step
-is a build-and-ship with no authoring in the middle, which is what keeps the
-schema/code disagreement window to roughly the length of a Vercel build.
+**Migration applied**, then deployed immediately:
+`dpl_ALxD3bptRChoHciYEG4onWeUa45p`, target production, Ready, confirmed
+serving `tci-ai-assistant.vercel.app` via `vercel inspect`.
 
-Auto-deploy is off, so nothing ships on its own. The state resolves the
-moment the migration is applied and the deploy runs, back to back.
+**The first apply attempt failed, and failed cleanly.** `can_access_section`
+is a `language sql` function, so Postgres validates its body at creation
+time; defined before `enrollments.section_id` existed, it aborted the
+migration. **Nothing partially applied** — verified immediately after:
+`sections` absent, `enrollments.course_id` intact, `can_access_course`
+intact, all data present. Production was never at risk and no disagreement
+window opened. This is exactly the failure mode the atomic single-migration
+decision was chosen to guarantee, and it earned its keep on first use. The
+committed migration file carries an ordering note so the trap is not
+rediscovered.
+
+**Post-deploy verification, all confirmed live:**
+- Gate unchanged: `GET /` 401, `POST /api/chat` 401.
+- Through the gate with no session, an ordinary question returns **401, not
+  503**, which is the specific signal that `can_access_section` resolves.
+- Distress override still works in production: a crisis message with no
+  session returned **200** with the full crisis text.
+- The event it wrote carried `section_id = NULL` for the fabricated
+  identifier, exactly as designed, and was deleted afterward.
+- Data: 1 section ("Section 1", `join_code` A4D3KAWR preserved,
+  `access_mode` join_code), 3 accepted staff rows (professor, escalation
+  recipient, wellbeing reader), 3 audit rows attributed to
+  `system:sections-migration`, 6 history rows backfilled, 0 enrollments.
+- Schema: 0 moved columns left on `courses`, `can_access_course` gone, both
+  partial unique indexes present, 6 triggers across `enrollments`,
+  `sections`, and `section_staff`, RLS enabled with a policy on all three
+  new tables.
+- **The audit trigger rejects an unattributed write**: an insert with
+  `app.actor_email` unset was refused and the staff row count was unchanged.
+- `sections_needing_attention` correctly surfaces MKTG365's section with
+  `no_end_date_no_purge_clock = true` and
+  `unacknowledged_role_concentration = false` (the acknowledgment is on
+  file), which is the warning state working rather than a silent default.
 
 ## DEFECT (unexploded): distress purge clock is event-age based, not section based
 
