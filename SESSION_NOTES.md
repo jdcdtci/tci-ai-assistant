@@ -1762,6 +1762,196 @@ signed in 06:32:08, enrolled 06:32:20, and produced **zero** interaction
 history, distress events, and memory-write failures. Both enrollments were
 then deleted and MKTG365 confirmed back to **zero enrollments**.
 
+## DEFECT (unexploded): distress purge clock is event-age based, not section based
+
+Checked 2026-09-06 as its own immediate question, separate from the sections
+design.
+
+**Confirmed: the clock is purely creation-based.** The deployed
+`purge_distress_events` reads
+`where created_at < now() - interval '30 days'` for the message purge and
+`< now() - interval '180 days'` for the row delete. Neither clause
+references course or section state in any way.
+
+**Confirmed: it has NOT produced an early purge, and could not have.**
+- `cron.job_run_details` is **empty** — the job has never executed. It was
+  created 2026-09-06 around 05:00 UTC with schedule `17 3 * * *` (03:17
+  daily), which had already passed, so its first run is 03:17 the following
+  day.
+- `distress_events`: 0 rows, 0 with `message_purged_at` set, 0 with a null
+  message.
+- The table was created 2026-09-06. Nothing in it has ever been older than a
+  few hours. Every row that ever existed was a test row created and deleted
+  the same night.
+
+**Severity is entirely forward-looking, and it is real.** MKTG365 has
+`expires_at = null`. On the first real term running longer than 30 days,
+crisis message text nulls out **mid-term**, while the section is still
+active and the wellbeing reader still carries a standing obligation to read
+it. The reader's evidence expires while their responsibility continues.
+The 180-day row delete has the same shape.
+
+**Fix direction (with sections):** key the clock off section close rather
+than event creation. `purge_memory_write_failures` is also creation-based
+but needs no change: it holds operational metadata with no responsibility
+window attached.
+
+## PROPOSAL: sections, chat history, and transcript export (investigated, not built)
+
+Investigated 2026-09-06. **No migration written.** Blocked on three
+prerequisites (below) plus the owner's decision on one schema shape.
+
+### Inventory: where each safety boundary belongs
+
+| Boundary | Belongs at | Reasoning |
+|---|---|---|
+| `escalation_recipient_email` | **Section** | Different professors per section. `escalation_enabled` is generated from it and moves with it. **No course-level fallback**: inheriting a course default recreates "escalation with nowhere real to go" as a recipient who is not this section's professor. |
+| `distress_log_reader_email` + interval | **Section** | Both-or-neither and positive-interval CHECKs move intact. |
+| `solo_responsibility_ack` | **Section** | Asks whether one person holds both roles *here*; one section may have two people and another one. |
+| `access_mode` | **Section** | A section is what opens and closes. Course-level kill switch left as an open question. |
+| Join code | **Section** | Each section has its own. **Uniqueness stays global, not per course**: a student types a code with no course context, so it must identify exactly one section system-wide. |
+| `expires_at` | **Section** | Recommend `starts_at` + `ends_at`. Note this is new behaviour: today only expiry is checked, so a not-yet-started section would currently be enterable. |
+| `can_access_course` | **Becomes `can_access_section`** | Every clause moves. Nothing entitlement-related remains at course level. |
+| `distress_events.course_id` | **Section** | The wellbeing reader is section-level, so events must attribute to a section. Course derivable by join; storing both would let them disagree. |
+| `student_interaction_history.course_id` | **Section** | Memory does not carry across sections (resolved below). Note this table currently has **no foreign keys at all**. |
+| `memory_write_failures.course_id` | **Section** | Matches the write it records. |
+
+### Knowledge base: already structurally correct, no change needed
+
+`knowledge_documents.course_id` keys on course and `match_knowledge_chunks`
+takes a course id. With sections sitting between course and enrollment, all
+sections of a course share the same documents automatically. No change to
+`knowledge_documents`, `knowledge_chunks`, or the retrieval function.
+
+**The most important consequence of the whole restructure:** entitlement
+becomes section-scoped while retrieval stays course-scoped. So `/api/chat`
+should take **`section_id`** and derive `course_id` server-side from the
+section row. That is strictly better than today, removing the last
+client-supplied identifier from the retrieval path rather than merely
+validating one.
+
+### Proposed schema shape
+
+- **`courses`** keeps only what is genuinely shared: `id`, `name`,
+  `program`, `created_at`. `program` stays because persona is per-*program*
+  (spec 2.3) and all sections of a course share it.
+- **`sections`** (new): `id`, `course_id` (FK restrict), `label`,
+  `join_code` (globally unique, `generate_unique_join_code()` default),
+  `access_mode` (default `'closed'`), `starts_at`, `ends_at`,
+  `escalation_recipient_email`, `escalation_enabled` (generated),
+  `distress_log_reader_email`, `distress_log_review_interval_hours`,
+  `solo_responsibility_ack`, `solo_responsibility_ack_at`,
+  `topic_listing_enabled`, `institutional_crisis_resource`, `created_at`.
+  Carries all four existing CHECKs plus both enrollment triggers.
+- **`enrollments`**: `course_id` becomes `section_id`; unique becomes
+  `(student_email, section_id)`.
+
+**Migration timing is unusually cheap right now:** MKTG365 gets one section
+carrying its current values, and enrollments are at **zero**, so nothing
+needs re-pointing.
+
+### Chat history (student-facing)
+
+- **`conversations`**: `id`, `section_id`, `student_id`, `title`,
+  `created_at`, `updated_at`.
+- **`messages`**: `id`, `conversation_id`, `role`, `content`, `created_at`,
+  `redacted_at`, `redaction_reason`.
+
+Reads scoped through `can_access_section`, never a plain fetch by student
+id. Writes happen alongside the existing pipelines, never inside them:
+`classifyDistress` and `recordExchange` are not modified.
+
+**Redaction is structural, confirmed by the owner.** Distress-classified
+content is **not stored in `messages` at all** — marker only. The content
+lives exclusively in `distress_events` under its own retention clock. If the
+text is not in the table, no query, export bug, or future call site can leak
+it, and it is not duplicated under two different clocks.
+
+**Redaction predicate, confirmed corrected:** `level >= personal_distress`
+**OR** `interpersonal_harm = true`, and it covers **both the student's
+message and the assistant's own crisis-response text**, since the fixed
+crisis text itself reveals that a crisis occurred.
+
+### The nine retention ambiguities, and their resolutions
+
+| # | Ambiguity | Resolution (owner) |
+|---|---|---|
+| 1 | Are raw transcripts kept alongside the export? | **No. Deleted at export.** |
+| 2 | Export automatic or professor-initiated? | **Automatic, scheduled job.** File exists whether or not it is ever downloaded. |
+| 3 | 120 days from export or from download? | **From export.** |
+| 4 | Section with null `ends_at`? | **Retained indefinitely, no purge clock started** — and this must be a **visible warning state on the section, not a silent default**. |
+| 5 | Conversation live at close? | **Truncated at whatever point it reached.** |
+| 6 | Distress clocks are creation-based, not section-based | Confirmed a real defect; see the separate entry above. Fix with sections. |
+| 7 | Where does the `.md` live? | Storage bucket, which does not exist. Prerequisite below. |
+| 8 | Student export of their own data? | **Explicitly out of scope for now**, decided rather than omitted. |
+| 9 | Does memory carry across sections? | **No. A retaken course starts fresh**, since carrying it silently would conflate two terms' understanding of the same student. |
+
+### Three blocking prerequisites, sized
+
+None of the chat-history or export work starts until these exist.
+
+**1. Professor authentication — smallest, but gated by an existing
+blocker.** Supabase Auth exists; there is no notion of role, and every
+authenticated user is a student by assumption. Cheapest correct path reuses
+the existing auth and derives role by lookup, with no second auth system:
+a role resolution helper, session verification on professor routes, and a
+`can_read_section_transcripts(email, section_id)` function mirroring
+`can_access_section`. **Hard sequencing link: production Google sign-in is
+currently broken, so no professor can sign in on production at all until
+that is fixed.**
+
+**2. Professor identity model — medium, and it forces a decision about work
+already verified.** No link exists from a person to a section as its
+professor; `escalation_recipient_email` is merely the professor today by
+setup coincidence. Two shapes:
+- *Add a third column* (`professor_email`): cheapest, preserves the
+  generated `escalation_enabled` column and the ack trigger exactly as
+  built and verified.
+- *A `section_staff` table* (section, person, role in professor /
+  escalation_recipient / wellbeing_reader): more correct once three distinct
+  roles exist, and it turns "does one person hold multiple roles" into a
+  query rather than a string comparison, which is what the
+  single-responsibility standing note actually needs. **But it reworks the
+  generated column and the ack trigger**, both built and verified
+  2026-09-06.
+
+Recommendation is the role table for correctness, flagged as the owner's
+call because it means redoing proven work rather than extending it.
+
+**3. Storage and the `.md` export — largest; introduces a runtime surface
+that does not exist.** No bucket, no storage code, no scheduled job outside
+the request path. Two shaping findings: **`pg_cron` cannot delete storage
+objects** (it runs SQL only), so the 120-day deletion needs `pg_net`
+(available) calling the storage API, or an external scheduler; and
+rendering markdown with redaction applied is application logic rather than
+SQL, so the export job wants an Edge Function or a Vercel cron route rather
+than `pg_cron`. Vercel cron on Hobby is daily granularity, adequate here.
+
+### Useful decomposition
+
+The **student-facing** half of chat history (multi-thread conversations, new
+chats, section-scoped reads) depends on **none** of the three prerequisites.
+Only professor browse, download, and export are blocked. That half can ship
+independently once sections land.
+
+### Still open, needing a decision before building
+
+- Course-level kill switch (disable an entire course across all sections),
+  or is section-level `access_mode` sufficient?
+- Should a student be allowed to enrol in two sections of the same course
+  (retake across terms)? Affects the `(student_email, section_id)`
+  uniqueness story.
+- `institutional_crisis_resource`: section or course? Recommended section,
+  for consistency with the wellbeing reader.
+- Professor identity shape: third column or `section_staff` role table.
+
+### Restructure discipline
+
+This moves every safety mechanism built on 2026-09-06. Each relocated
+constraint, generated column, and trigger must be **re-verified live against
+the deployed schema**, not assumed to carry over — the same discipline used
+when each was first built.
+
 ## Stage 3: what it actually was, and its results
 
 **Read this before assuming three defects were skipped.** Stage 3 was
