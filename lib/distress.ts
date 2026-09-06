@@ -88,6 +88,10 @@ Between academic_frustration and personal_distress, when unsure, choose the LOWE
 
 Between possible_risk and crisis, when unsure, choose the HIGHER level. Here the cost of under-reacting is far greater than the cost of over-reacting.
 
+Apply that rule specifically when the student refers to something serious indirectly rather than naming it. A disclosure does not have to be explicit to be a disclosure. When a student says they have been having "those thoughts", "the same thoughts", or "thoughts like that", and their own sentence or the immediate conversation supplies a referent involving suicide, self-harm, or not wanting to be alive, treat that referent as stated: this is crisis, not possible_risk. The same applies to a student who says they have "felt that way too" or "been there myself" in response to such material. Do not downgrade a disclosure merely because the student reached for a pronoun or a euphemism instead of the words themselves.
+
+This does not mean treating every gloomy or weary statement as crisis. The test is whether a specific serious referent is actually recoverable from what the student wrote or from the immediate conversation. General hopelessness with no such referent stays possible_risk.
+
 Academic discussion of distressing subjects is not distress. This course is marketing research, and it covers survey design, research ethics, vulnerable populations, and sensitive-topic instruments. A student may legitimately discuss studying depression, self-harm, or suicide as research subject matter. That is none.
 
 Critically, a survey item is itself written in the first person. A student who quotes, drafts, critiques, or asks you to write an instrument item such as "I have thought about ending my life" is doing coursework, not disclosing something about themselves. Distinguish a student ASSERTING something about themselves from a student QUOTING or CONSTRUCTING instrument wording. The question is whether the student is speaking in their own voice about their own present situation.
@@ -133,6 +137,11 @@ export async function classifyDistress(
       const result = await anthropic.messages.create({
         model: "claude-sonnet-5",
         max_tokens: 256,
+        // No temperature parameter: it is deprecated for this model and
+        // sending it returns a 400. Exact run-to-run determinism is
+        // therefore not available here, so a single case changing verdict
+        // between test runs needs a confirming re-run before it is read as
+        // a real effect of a prompt change rather than sampling variance.
         system: DISTRESS_SYSTEM,
         tools: [DISTRESS_TOOL],
         tool_choice: { type: "tool", name: "record_distress" },
@@ -143,10 +152,20 @@ export async function classifyDistress(
       if (toolUse && toolUse.type === "tool_use") {
         return toolUse.input as DistressClassification;
       }
-    } catch {
-      // Fall through to the retry, then to null.
+    } catch (err) {
+      // Never swallow the cause. This component fails open by design, so a
+      // silent failure is indistinguishable from "no distress detected",
+      // which is precisely the state that must never be invisible.
+      console.warn(
+        `[distress] classification attempt ${attempt + 1} failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      // Brief backoff before the single retry. An immediate retry against a
+      // rate limit just fails again, and this runs inline with a student's
+      // request, so the wait stays short.
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 750));
     }
   }
 
+  console.warn("[distress] classification unavailable; proceeding without a distress signal");
   return null;
 }

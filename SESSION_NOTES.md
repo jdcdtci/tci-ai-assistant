@@ -1407,6 +1407,69 @@ does not argue with the student, and does not impose reasons for living:
 >
 > If you want to pick the coursework back up, we can do that.
 
+### Boundary set expanded, round-up fix applied and measured before/after
+
+Suite grew from 20 to 33 cases, weighted at the boundary and, deliberately,
+at the counter-cases. **8 cases now sit at the `possible_risk` / `crisis`
+boundary** (was 4), and **8 are tagged as over-fire guards** whose only job
+is to catch the damage a stronger round-up rule could cause: general
+hopelessness with no referent that must stay `possible_risk`, real
+bereavement and secondhand distress that must stay `personal_distress`,
+and three that quote the exact euphemisms the new instruction names ("I
+have felt that way too", "those thoughts", "thoughts like that") inside
+academic or instrument-design questions and must stay `none`.
+
+| | Baseline | After |
+|---|---|---|
+| Overall exact | 27 | **31** |
+| Within acceptable range | 3 | 1 |
+| Failed | 3 | **1** |
+| Boundary exact | **4/8** | **7/8** |
+| Over-fire guards held | 8/8 | **8/8** |
+
+**Expanding first was the right call, and the reason is in the baseline.**
+The original single implied-referent case understated the problem. With
+four such cases, the baseline missed **all four**: two landed
+`possible_risk` inside the acceptable range, one failed outright, and one
+came back `personal_distress`, two levels below crisis, with a rationale
+that itself acknowledged "a genuine first-person disclosure... though no
+explicit current risk is stated." That is a systematic weakness, not a
+one-off, and it would not have been visible from the 1-in-4 number.
+
+**The fix worked and did not over-fire.** All four implied-referent cases
+moved up, three to exact `crisis`. Every one of the eight guards held,
+including all three euphemism guards that quote the instruction's own
+trigger phrases. The third paragraph of the revision is doing its job.
+
+**Stability confirmed rather than assumed.** `temperature` cannot be set
+on this model, so exact determinism is unavailable and a single case
+flipping could be sampling noise. Two independent runs of the revised
+prompt returned identical results down to the same single `PASS~` and the
+same single failure, and the observed change is a coordinated shift across
+four related cases with the controls unmoved, not one flip. That is a real
+effect.
+
+**The single remaining failure is the known retraction design question,**
+not a classifier defect: it still returns `crisis` where the suite expects
+`none`, on the reasoning that minimization after a disclosure is not a
+credible reversal. Left failing on purpose until the approved response
+layer fix lands, at which point the expectation gets revisited alongside
+it.
+
+**Two defects found and fixed along the way, both worth recording.**
+1. **`temperature` is deprecated for `claude-sonnet-5` and returns a
+   400.** Setting it (an attempt to make the before/after comparison
+   sound) broke every classification in the first attempted baseline run.
+   Removed, with a comment recording why determinism is unavailable here.
+2. **The classifier was swallowing failure causes silently.** The original
+   `catch {}` discarded the error, so a total API failure presented
+   exactly like "no distress detected" — the one state that must never be
+   invisible in this component. It now logs the cause on each attempt and
+   logs again when it gives up, and a brief backoff was added before the
+   single retry, since an immediate retry against a rate limit just fails
+   twice. This was the defect that made the temperature bug look like
+   rate limiting.
+
 **BLOCKING: one decision remains before the student-facing half is
 written.** The MKTG365 escalation recipient, which is the same instructor
 conversation already planned. The distress-log reader question is now
