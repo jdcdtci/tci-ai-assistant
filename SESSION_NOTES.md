@@ -1624,17 +1624,78 @@ Google sign-in that cannot be completed here (credential plus CAPTCHA), and
 production sign-in is separately broken (see below). So the fix is specified
 and waiting on the owner rather than shipped unverified.
 
-## Note: a second person has enrolled in MKTG365
+## FIXED: can_access_course now enforces entitlement (pending owner UI test)
 
-`enrollments` currently holds **two** rows, both MKTG365, both 2026-09-06:
-`goalkeeper.dielmann@gmail.com` (06:30) and **`cj.dielmann@gmail.com`
-(06:32)**. Neither was created by this session's testing and both were left
-in place.
+The defect above is fixed in code and at the database layer. **Not yet
+verified through the UI**, which is the owner's step; see the walkthrough at
+the end of this entry.
 
-This matters beyond bookkeeping: the standing single-responsibility note
-lists "a real student enrolling" as its first trigger condition, and a
-second real person now holds a role in this course. That note's revisit
-condition has therefore **fired** and is no longer hypothetical.
+**`can_access_course(p_student_email text, p_course_id uuid)`** (migration
+`20260906164326`), `security definer`, execute revoked from `public`,
+`anon`, and `authenticated` and granted only to `service_role`. It returns
+true only when the course exists, has not expired, and either is
+`access_mode = 'public'` or has an `enrollments` row linking the supplied
+verified email to that course. Every other path returns false: unknown
+course, null course, null identity where identity is required, expired
+course, and `access_mode = 'closed'`.
+
+**Branch coverage verified against temporary fixtures, all seven as
+expected:** enrolled + join_code true; unenrolled false; null identity
+false; fabricated course id false; public + null identity true; closed
+false; **enrolled but expired false** (that last one proves denial comes
+from expiry rather than a missing enrollment, and it also finally enforces
+spec 6.12.2 at chat time, which nothing did before).
+
+**`/api/chat` changes.** It now verifies the session with
+`getSupabaseServerClient().auth.getUser()`, mirroring `/api/enroll`, and
+**no longer reads `student_id` from the request body at all** — identity is
+`user.id`, entitlement is checked against `user.email`. The access check
+runs **before** the embedding and retrieval, so an unentitled request never
+reaches `match_knowledge_chunks` and never spends a Voyage slot. An error
+from the check itself returns 503 rather than proceeding: a check that
+could not run is not a check that passed.
+
+**This also closes the long-standing "In progress / next" item 2**, which
+had flagged both that `/api/chat` fully trusts the client-supplied
+`student_id` and that it never verifies enrollment in the requested course.
+Both are now false.
+
+**Verified without a session (the fail-closed half):** requests with no
+session to the real course, to a fabricated course id, and with a spoofed
+`student_id` in the body all returned **401**, in 169 to 1210ms, with
+`[access] refused ... session=none` logged, **no `[retrieval]` line**
+(embedding never ran), and zero rows written to `distress_events`,
+`student_interaction_history`, or `memory_write_failures`. A refused request
+leaves no trace and costs nothing.
+
+**One judgment call flagged for confirmation.** The instruction was "no
+session, no matching enrollment, no answer, full stop." The function honours
+that for every mode except `public`, where it allows access without a
+session, because that is precisely what `access_mode = 'public'` declares
+(spec 12.2a) and it is an opt-in away from the `closed` default. No public
+course exists, so the branch is unreachable today. Say the word and it
+becomes a hard requirement in all modes.
+
+**Still owed: the trade-off worth knowing.** The access check runs before
+distress classification, so an unentitled or signed-out caller writing a
+crisis message is refused rather than receiving a crisis response. That is
+correct for a stranger, but it also means a genuinely enrolled student whose
+session has expired mid-conversation gets a 401 instead of crisis support.
+The UI sends them to sign-in, so it is recoverable, but it is a real edge and
+is recorded rather than discovered later.
+
+## Note: both MKTG365 enrollments were the owner's own test accounts
+
+Corrects the entry that previously appeared here. `enrollments` briefly held
+two rows, `goalkeeper.dielmann@gmail.com` and `cj.dielmann@gmail.com`. The
+second is **the owner's own second test account, not a real second person**,
+confirmed by the owner. **The single-responsibility trigger condition has
+NOT fired**; the earlier note claiming it had was wrong and is retracted.
+
+Activity check before removal: `cj.dielmann@gmail.com` was created 06:32:02,
+signed in 06:32:08, enrolled 06:32:20, and produced **zero** interaction
+history, distress events, and memory-write failures. Both enrollments were
+then deleted and MKTG365 confirmed back to **zero enrollments**.
 
 ## BLOCKING: production Google sign-in is non-functional for everyone
 

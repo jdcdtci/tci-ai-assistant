@@ -4,6 +4,7 @@ import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
 import { embed } from "@/lib/voyage";
 import { getSupabaseServiceClient } from "@/lib/supabase";
+import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { type Turn } from "@/lib/classify";
 import { recordExchange, recordMemoryWriteFailure } from "@/lib/memory";
 import { buildVoiceSection } from "@/lib/persona";
@@ -319,10 +320,57 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { message, course_id, student_id, history } = await request.json();
+  const { message, course_id, history } = await request.json();
 
   if (!message || !course_id) {
     return NextResponse.json({ error: "Both 'message' and 'course_id' are required." }, { status: 400 });
+  }
+
+  // Identity comes from the verified session, never from the request body,
+  // mirroring /api/enroll. `student_id` is deliberately NOT read from the
+  // payload any more: a client-supplied id let a caller write history and
+  // distress events under someone else's identity, and a client-supplied
+  // course_id let any caller read any course's content, which was
+  // demonstrated live against a purpose-built second course.
+  const supabaseAuth = await getSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabaseAuth.auth.getUser();
+
+  const verifiedEmail = user?.email ?? null;
+  const student_id = user?.id ?? null;
+
+  // Entitlement is decided by the database, not here. can_access_course
+  // fails closed on every path that is not an explicit allow: unknown
+  // course, expired course, access_mode 'closed', no session where a session
+  // is required, and no matching enrollments row. It is called BEFORE the
+  // embedding and retrieval so an unentitled request never reaches
+  // match_knowledge_chunks and never spends a Voyage slot.
+  const supabase = getSupabaseServiceClient();
+  const { data: allowed, error: accessError } = await supabase.rpc("can_access_course", {
+    p_student_email: verifiedEmail,
+    p_course_id: course_id,
+  });
+
+  if (accessError) {
+    // Fail closed on an error too. An access check that cannot run is not
+    // an access check that passed.
+    console.error(`[access] can_access_course failed for course ${course_id}: ${accessError.message}`);
+    return NextResponse.json({ error: "Could not verify course access right now." }, { status: 503 });
+  }
+
+  if (allowed !== true) {
+    console.warn(
+      `[access] refused course=${course_id} session=${verifiedEmail ? "yes" : "none"}`,
+    );
+    return NextResponse.json(
+      {
+        error: verifiedEmail
+          ? "You are not enrolled in this course."
+          : "You must be signed in to use this course assistant.",
+      },
+      { status: verifiedEmail ? 403 : 401 },
+    );
   }
 
   const priorTurns: Turn[] = Array.isArray(history) ? history.slice(-MAX_HISTORY_TURNS) : [];
@@ -365,8 +413,6 @@ export async function POST(request: NextRequest) {
       { status: 503 },
     );
   }
-
-  const supabase = getSupabaseServiceClient();
 
   // Retrieval and the course lookup are independent, so they run together
   // rather than in sequence. The course row is needed only for its program,
