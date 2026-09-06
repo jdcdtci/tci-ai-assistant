@@ -1823,6 +1823,45 @@ be verified without the owner: the Google credential entry, the CAPTCHA, the
 consent screen, the code exchange at `/auth/callback`, the session cookie
 being set on the production domain, and landing signed in.
 
+## DEPLOYED to production 2026-09-06, second deploy: the entitlement fixes
+
+Shipped `can_access_course`, the `/api/chat` session verification, and the
+distress-response override, closing the proven cross-course access defect in
+production. Deployment `dpl_2eFhqPRFFYPGcvnRcyL9qw4vR3mM`, target
+production, status Ready, confirmed serving `tci-ai-assistant.vercel.app`
+via `vercel inspect` rather than assumed from a successful build. Same
+`--scope jdcdtcis-projects` workaround as the first deploy; the stale
+`orgId` in `.vercel/project.json` is still unfixed.
+
+**Gate re-verified unchanged:** `GET /` 401, `POST /api/chat` 401, wrong
+password 401.
+
+**Verified through the gate against the real production domain**, with the
+site password supplied but no Supabase session:
+
+| Case | Production result |
+|---|---|
+| unentitled ordinary question | **401** "You must be signed in" |
+| unentitled, fabricated course id | **401** |
+| **crisis, no session** | **200**, full crisis text |
+| academic_frustration, no session | **401** |
+
+So the entitlement gate and the distress override both behave in production
+exactly as they did locally, including the boundary: a
+struggling-but-not-distressed message does not unlock anything.
+
+**Not verified against production, and deliberately so:** the *entitled*
+request. That requires a Supabase session obtained through Google sign-in,
+which is the separately-broken production path documented above, and which
+cannot be completed here regardless. The entitled path was verified locally
+by the owner through a real browser session; it has not been exercised
+against production and should not be claimed as such until production
+sign-in is fixed.
+
+The one distress event this verification wrote in production (crisis,
+anonymous, course attached) was deleted afterward; `distress_events`,
+`enrollments`, and `memory_write_failures` all confirmed back to zero.
+
 ## DEPLOYED to production 2026-09-06
 
 Corrects the repeated statement elsewhere in this file that nothing from
