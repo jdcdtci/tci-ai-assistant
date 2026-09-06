@@ -3,10 +3,10 @@
   "configurations": [
     {
       "name": "dev",
-      "runtimeExecutable": "sh",
+      "runtimeExecutable": "npm",
       "runtimeArgs": [
-        "-c",
-        "SITE_PASSWORD= npm run dev"
+        "run",
+        "dev"
       ],
       "port": 3000,
       "autoPort": false
