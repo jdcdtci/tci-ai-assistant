@@ -55,6 +55,9 @@ export default function Home() {
   const [isLongWait, setIsLongWait] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Which identity the section restore has already run for. See the effect
+  // below: without it this fired three times on every load.
+  const restoredForRef = useRef<string | null>(null);
 
   useEffect(() => {
     const supabase = getSupabaseBrowserClient();
@@ -77,33 +80,45 @@ export default function Home() {
   // still decided server-side: /api/enrollment returns only sections that
   // can_access_section currently allows, so a closed section does not come
   // back and the join screen is shown instead.
+  // A primitive, not the user object. Both getUser() and onAuthStateChange
+  // set a NEW object with the same contents, so depending on `user` re-ran
+  // this on every auth callback even when the identity had not changed.
+  const authState = user === "loading" ? "loading" : user ? user.id : "anon";
+
   useEffect(() => {
-    if (user === "loading") return;
-    if (!user) {
+    if (authState === "loading") return;
+    if (authState === "anon") {
       setIsRestoring(false);
       return;
     }
 
-    let cancelled = false;
+    // This ran three times per load: StrictMode double-invokes effects in
+    // development, and onAuthStateChange then fired with a fresh object that
+    // re-triggered the dependency. The ref makes the restore happen once per
+    // identity regardless of how often the effect is invoked.
+    //
+    // Note there is deliberately no `cancelled` flag paired with this. A
+    // cleanup that cancelled the first invocation would leave StrictMode's
+    // second invocation skipped by the ref and the section never set, which
+    // is precisely the bug this guard would otherwise introduce.
+    if (restoredForRef.current === authState) return;
+    restoredForRef.current = authState;
+
     (async () => {
       try {
         const res = await fetch("/api/enrollment");
         const data = await res.json();
-        if (!cancelled && res.ok && Array.isArray(data.sections) && data.sections.length > 0) {
+        if (res.ok && Array.isArray(data.sections) && data.sections.length > 0) {
           setSection(data.sections[0]);
         }
       } catch {
         // A failed restore is not an error state: it just means the join
         // screen is shown, which is the pre-existing behaviour.
       } finally {
-        if (!cancelled) setIsRestoring(false);
+        setIsRestoring(false);
       }
     })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [user]);
+  }, [authState]);
 
   const loadConversations = useCallback(async (sectionId: string) => {
     try {
