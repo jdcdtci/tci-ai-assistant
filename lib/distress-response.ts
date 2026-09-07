@@ -43,12 +43,6 @@ import type { DistressLevel } from "./distress";
 // prompt-injected. For the two highest levels the tutoring model is not
 // asked to generate anything at all.
 
-// Substring used to detect, from conversation history alone, that a crisis
-// response has already been given in this conversation. History-based rather
-// than database-based on purpose: it works for anonymous students, who have
-// no student_id to look up.
-export const CRISIS_MARKER = "the coursework will keep";
-
 const CRISIS_FIRST = `I am going to stop the coursework here, because what you have just said matters more than that.
 
 Let me be straightforward with you. I am a course assistant. I am not a counselor, I cannot stay with you, and I am not able to give you the kind of help this deserves. What I can do is point you to people who can.
@@ -59,7 +53,7 @@ If you are in immediate danger, please call 911 or go to your nearest emergency 
 
 One thing I would rather say than let you assume: this conversation is recorded, so I cannot promise you privacy about what you have written here.
 
-The coursework will keep. Whenever you want to come back to it, I am here.`;
+Whatever the coursework needed from you, it can wait. None of it is urgent next to this.`;
 
 // Shown when a crisis classification recurs in a conversation that has
 // already had one. Approved separately, and sourced the same way rather than
@@ -122,12 +116,42 @@ export function fixedDistressResponse(
  * classifies as crisis, and should be met with the short text rather than
  * the whole thing again.
  */
+// Detection matches against the crisis texts THEMSELVES, not against a
+// sentence quoted out of one of them.
+//
+// This previously compared history to a CRISIS_MARKER constant holding the
+// literal substring "the coursework will keep". That made a line of
+// student-facing prose load-bearing: revising the wording of the close --
+// an ordinary editorial change to approved copy -- would have silently
+// stopped every recurrence from being recognised, and every repeat crisis
+// would have received the full script again. That is precisely the failure
+// the first-versus-repeat distinction exists to prevent, and it would have
+// failed quietly, in the one path with no room to fail quietly.
+//
+// Matching the constants removes the class of bug rather than this instance
+// of it: the thing compared against IS the thing sent, so the two cannot
+// drift apart. Reword the texts freely; detection follows.
+//
+// Still history-based rather than database-based, for the original reason:
+// it works for anonymous students, who have no student_id to look up.
+const CRISIS_RESPONSE_TEXTS = [CRISIS_FIRST, CRISIS_REPEAT];
+
+// Whitespace-collapsed and case-folded so that trivial transport differences
+// cannot defeat the match. Prefix rather than equality because
+// withInstitutionalResource() appends to the end of the text.
+function normalizeForMatch(s: string): string {
+  return s.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
 export function hasCrisisAlreadyBeenRaised(
   priorTurns: { role: string; content: string }[],
 ): boolean {
-  return priorTurns.some(
-    (t) => t.role === "assistant" && t.content.toLowerCase().includes(CRISIS_MARKER),
-  );
+  const known = CRISIS_RESPONSE_TEXTS.map(normalizeForMatch);
+  return priorTurns.some((t) => {
+    if (t.role !== "assistant") return false;
+    const content = normalizeForMatch(t.content);
+    return known.some((text) => content.startsWith(text));
+  });
 }
 
 // personal_distress: ONE generated clause, then fixed text.

@@ -3354,3 +3354,79 @@ testing and has been restored to its original contents both times.
 The Upstash credentials (`KV_REST_API_*`) live in
 `.env.development.local`, not `.env.local`, which is why local
 `/api/chat` works despite those names being absent from the latter.
+
+---
+
+## Crisis close reworded; repeat detection decoupled from prose (2026-09-07, PM)
+
+**Found during the first signed-in browser test**, which is the human path the
+handoff note said had never been walked. Josh ran it locally and read the
+crisis response as a student would.
+
+**First, a non-bug.** The first distress message classified as
+`personal_distress` and the second as `crisis`, confirmed in `distress_events`.
+So the second message was the *first* crisis in that conversation and correctly
+received the full text. Repeat detection did not fail; it had no prior crisis
+to match on. The repeat path remains untested as of this entry.
+
+Both events wrote with `student_id` **and** `section_id` populated, which is
+the section-aware distress path working end to end on a real session for the
+first time.
+
+**The real finding was the closing line.** It read:
+
+> The coursework will keep. Whenever you want to come back to it, I am here.
+
+Two defects. "The coursework will keep" is an idiom requiring parsing, placed
+where the reader has least capacity for it. Worse, "I am here" re-offers
+exactly the presence the message honestly declines three paragraphs earlier
+("I cannot stay with you"), brushing against the #BeThe1To prohibition on
+committing to what you cannot accomplish -- the one rule the rest of the text
+respects carefully.
+
+Approved replacement:
+
+> Whatever the coursework needed from you, it can wait. None of it is urgent
+> next to this.
+
+Subject is the coursework, not the assistant, which is what removes the
+contradiction. *Urgent* rather than *important* is deliberate: telling a
+student their coursework does not matter imposes your own reasons on them, and
+a student in crisis partly because of the coursework would hear it badly.
+`CRISIS_REPEAT` and `POSSIBLE_RISK` were not changed and did not need to be.
+
+**Structural fix, and the reason this entry matters beyond the copy edit.**
+`CRISIS_MARKER` held the literal substring `"the coursework will keep"` and was
+how the system detected from history that a crisis response had already been
+given. A line of student-facing prose was load-bearing. Rewording it -- an
+ordinary editorial change -- would have silently stopped every recurrence from
+being recognised, returning the full script on every repeat, which is precisely
+what the first-versus-repeat distinction exists to prevent. It would have
+failed quietly, in the one path with no room to fail quietly.
+
+`CRISIS_MARKER` is deleted. `hasCrisisAlreadyBeenRaised` now matches against
+`CRISIS_FIRST` and `CRISIS_REPEAT` themselves (whitespace-collapsed, case
+-folded, prefix-matched so an appended institutional resource still matches).
+The thing compared against IS the thing sent, so the two cannot drift. This
+removes the class of bug, not the instance.
+
+**The failure was demonstrated, not argued.** Against the new text, the old
+marker predicate returns `false`. Had the wording changed without this fix, the
+regression would have shipped invisibly.
+
+Eight cases pass, including two worth keeping: whitespace-mangled text still
+matches, and a *user* turn quoting the crisis text back does **not** match, so
+a student cannot suppress a real crisis response by pasting it.
+
+**Still outstanding from the browser test:** the repeat path. Send a further
+distress message in a conversation where crisis has already been raised;
+expect the short `CRISIS_REPEAT` text, not the full script.
+
+**Also noted, not fixed.** The retraction fixture in
+`scripts/test-distress-classifier.ts` uses a hand-written paraphrase as the
+prior assistant turn rather than the real `CRISIS_FIRST` text, so
+`hasCrisisAlreadyBeenRaised` returns false for it. Its note claims the repeat
+text is returned there; for that fixture it would not be. The assertion it
+actually makes is about classification and still passes, but the retraction
+case is not exercising the repeat path it claims to. Fix by using the real
+constant as the fixture.
