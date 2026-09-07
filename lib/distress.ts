@@ -190,3 +190,23 @@ export async function classifyDistress(
   console.warn("[distress] classification unavailable; proceeding without a distress signal");
   return null;
 }
+
+// These responses are safe to serve to an unentitled or signed-out caller
+// because none of them depends on retrieval or exposes course content:
+// crisis and possible_risk are fixed strings, and personal_distress is a
+// reflection of the student's own words generated with no course material
+// supplied. That is the same reasoning that already makes access_mode
+// 'public' safe with no session.
+//
+// It is ALSO the redaction predicate for conversation history: the turn
+// that gets a distress response is exactly the turn that is not stored in
+// public.messages. Those two rules must never diverge, so they are one
+// function rather than two matching expressions in different files.
+//
+// 'none' and 'academic_frustration' are deliberately NOT here. If they were,
+// any caller could reach ordinary course content by phrasing a message to
+// look like distress, which would trade one real vulnerability for a worse
+// one. Anything not in this list takes the normal entitlement path.
+export function requiresDistressResponse(c: DistressClassification): boolean {
+  return c.interpersonal_harm || LOGGABLE_LEVELS.includes(c.level);
+}

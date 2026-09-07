@@ -7,8 +7,9 @@ import { getSupabaseServiceClient } from "@/lib/supabase";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
 import { type Turn } from "@/lib/classify";
 import { recordExchange, recordMemoryWriteFailure } from "@/lib/memory";
+import { exchangeIsRedacted, recordExchangeTurns, recordHistoryWriteFailure } from "@/lib/history";
 import { buildVoiceSection } from "@/lib/persona";
-import { classifyDistress, LOGGABLE_LEVELS, type DistressClassification } from "@/lib/distress";
+import { classifyDistress, LOGGABLE_LEVELS, requiresDistressResponse, type DistressClassification } from "@/lib/distress";
 import {
   fixedDistressResponse,
   hasCrisisAlreadyBeenRaised,
@@ -241,20 +242,6 @@ const PATTERN_WINDOW_DAYS = 7;
 //
 // THE BOUNDARY, AND WHY IT SITS EXACTLY HERE
 //
-// These responses are safe to serve to an unentitled or signed-out caller
-// because none of them depends on retrieval or exposes course content:
-// crisis and possible_risk are fixed strings, and personal_distress is a
-// reflection of the student's own words generated with no course material
-// supplied. That is the same reasoning that already makes access_mode
-// 'public' safe with no session.
-//
-// 'none' and 'academic_frustration' are deliberately NOT here. If they were,
-// any caller could reach ordinary course content by phrasing a message to
-// look like distress, which would trade one real vulnerability for a worse
-// one. Anything not in this list takes the normal entitlement path.
-export function requiresDistressResponse(c: DistressClassification): boolean {
-  return c.interpersonal_harm || LOGGABLE_LEVELS.includes(c.level);
-}
 
 async function recordDistressEvent(
   supabase: ReturnType<typeof getSupabaseServiceClient>,
@@ -357,7 +344,7 @@ export async function POST(request: NextRequest) {
   // course content is course-scoped, and the course is derived server-side
   // from the section below. That removes the last client-supplied identifier
   // from the retrieval path rather than merely validating one.
-  const { message, section_id, history } = await request.json();
+  const { message, section_id, history, conversation_id } = await request.json();
 
   if (!message || !section_id) {
     return NextResponse.json({ error: "Both 'message' and 'section_id' are required." }, { status: 400 });
@@ -397,6 +384,80 @@ export async function POST(request: NextRequest) {
   }
 
   const priorTurns: Turn[] = Array.isArray(history) ? history.slice(-MAX_HISTORY_TURNS) : [];
+
+  // The conversation this turn belongs to, if the caller named one.
+  //
+  // Verified against BOTH this session's student_id and the section already
+  // checked above, so a caller cannot write a turn into someone else's
+  // transcript by supplying its id, and cannot move a conversation between
+  // sections. An anonymous caller has no student_id and so can never resolve
+  // one: that, plus conversations.student_id being NOT NULL, is why the
+  // anonymous path persists nothing.
+  let conversation: { id: string; created_at: string } | null = null;
+
+  if (conversation_id && student_id) {
+    const { data: conv } = await supabase
+      .from("conversations")
+      .select("id, created_at")
+      .eq("id", conversation_id)
+      .eq("student_id", student_id)
+      .eq("section_id", section_id)
+      .maybeSingle();
+
+    if (!conv) {
+      return NextResponse.json({ error: "No such conversation." }, { status: 404 });
+    }
+    conversation = conv;
+  }
+
+  // Every student-visible reply on the entitled path goes out through this.
+  //
+  // It does two things: persists the exchange, and returns conversation_id
+  // so a client that started a new conversation learns its id from the first
+  // reply rather than needing a second round trip.
+  //
+  // The write runs in after(), for the same reason recordExchange does: a
+  // transcript write must never delay the answer or fail it. Failures land
+  // in history_write_failures, never in a log line alone.
+  //
+  // `redacted` is not a parameter this function decides. It is passed by the
+  // call site from exchangeIsRedacted(classification), which is the same
+  // predicate that decided a distress response was owed in the first place.
+  const reply = (assistantText: string, redacted: boolean) => {
+    const conv = conversation;
+    const sid = student_id;
+
+    if (conv && sid) {
+      after(async () => {
+        try {
+          await recordExchangeTurns(supabase, {
+            conversationId: conv.id,
+            studentId: sid,
+            sectionId: section_id,
+            userText: message,
+            assistantText,
+            redacted,
+          });
+        } catch (err) {
+          // Backstop only. recordExchangeTurns records its own failures;
+          // this catches anything escaping it and records that too.
+          await recordHistoryWriteFailure(supabase, {
+            studentId: sid,
+            sectionId: section_id,
+            conversationId: conv.id,
+            role: "user",
+            reason: "exception",
+            detail: err instanceof Error ? err.message : String(err),
+          });
+        }
+      });
+    }
+
+    return NextResponse.json({
+      response: assistantText,
+      ...(conv ? { conversation_id: conv.id } : {}),
+    });
+  };
 
   if (allowed !== true) {
     // NOT entitled. Before refusing, classify: a distress signal must be
@@ -566,6 +627,47 @@ export async function POST(request: NextRequest) {
   const distress = await distressPromise;
 
   if (distress && distress.level !== "none" && distress.level !== "academic_frustration") {
+    // First-versus-repeat, decided in the database when this turn belongs to
+    // a persisted conversation.
+    //
+    // The text match below cannot survive restored history: redacted turns
+    // leave holes exactly where the crisis text would be, so it would return
+    // false and a repeat crisis in a resumed conversation would receive the
+    // full script again. crisis_already_raised reads distress_events, which
+    // still holds the fact, scoped to this student, this section, and this
+    // conversation's own start.
+    //
+    // p_since is the conversation's created_at, NOT null. Scoped to the
+    // conversation rather than to the student's whole history in the
+    // section: a crisis three weeks ago in a different conversation must not
+    // make a fresh disclosure today a "repeat" and shorten the response.
+    //
+    // With no conversation -- an anonymous caller, or a client that sent no
+    // conversation_id -- this falls back to the text match, which is correct
+    // for them: they persist nothing, so their history has no holes.
+    let crisisAlreadyRaised: boolean;
+    if (conversation && student_id) {
+      const { data: raised } = await supabase.rpc("crisis_already_raised", {
+        p_student_id: student_id,
+        p_section_id: section_id,
+        p_since: conversation.created_at,
+      });
+      crisisAlreadyRaised = raised === true;
+    } else {
+      crisisAlreadyRaised = hasCrisisAlreadyBeenRaised(priorTurns);
+    }
+
+    // ORDER IS LOAD-BEARING: this runs AFTER crisisAlreadyRaised is decided.
+    //
+    // recordDistressEvent used to run first. That was harmless while the
+    // check matched conversation history, which cannot contain the current
+    // turn. It is not harmless now: crisis_already_raised reads
+    // distress_events, so recording this turn first would make the check
+    // find THIS crisis and report a repeat on a student's very first
+    // disclosure, serving the brief text with no 911 line and no recording
+    // caveat. The question being asked is "was a crisis already raised
+    // BEFORE this turn", so this turn must not yet be written when it is
+    // asked.
     if (LOGGABLE_LEVELS.includes(distress.level)) {
       await recordDistressEvent(supabase, {
         section_id,
@@ -574,8 +676,6 @@ export async function POST(request: NextRequest) {
         classification: distress,
       });
     }
-
-    const crisisAlreadyRaised = hasCrisisAlreadyBeenRaised(priorTurns);
 
     const fixed = fixedDistressResponse(distress.level, {
       crisisAlreadyRaised,
@@ -591,7 +691,7 @@ export async function POST(request: NextRequest) {
       console.log(
         `[distress] level=${distress.level}${repeatField(distress.level, crisisAlreadyRaised)} responded with fixed text`,
       );
-      return NextResponse.json({ response: fixed });
+      return reply(fixed, exchangeIsRedacted(distress));
     }
 
     // personal_distress: only the reflection is generated. Everything after
@@ -627,10 +727,10 @@ export async function POST(request: NextRequest) {
       console.warn(
         `[distress] reflection generation failed, sending fixed portion alone: ${err instanceof Error ? err.message : String(err)}`,
       );
-      return NextResponse.json({ response: PERSONAL_DISTRESS_FALLBACK });
+      return reply(PERSONAL_DISTRESS_FALLBACK, exchangeIsRedacted(distress));
     }
 
-    return NextResponse.json({ response: assemblePersonalDistressResponse(reflection) });
+    return reply(assemblePersonalDistressResponse(reflection), exchangeIsRedacted(distress));
   }
 
   if (retrievalError) {
@@ -638,9 +738,10 @@ export async function POST(request: NextRequest) {
   }
 
   if (!chunks || chunks.length === 0) {
-    return NextResponse.json({
-      response: "I don't know. I don't have any course material available to answer that question.",
-    });
+    return reply(
+      "I don't know. I don't have any course material available to answer that question.",
+      false,
+    );
   }
 
   const response = await anthropic.messages.create({
@@ -684,5 +785,5 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  return NextResponse.json({ response: text });
+  return reply(text, false);
 }
