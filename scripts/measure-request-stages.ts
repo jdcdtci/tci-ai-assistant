@@ -48,21 +48,21 @@ async function stage<T>(label: string, fn: () => Promise<T>): Promise<T> {
 async function main() {
   const limit = await stage("Voyage slot check (Upstash round trip)", () => voyageRatelimit.limit("global"));
 
-  await stage("can_access_section (Supabase RPC)", () =>
-    supabase.rpc("can_access_section", { p_student_email: EMAIL, p_section_id: SECTION }),
+  await stage("can_access_section (Supabase RPC)", async () =>
+    await supabase.rpc("can_access_section", { p_student_email: EMAIL, p_section_id: SECTION }),
   );
 
-  const section = await stage("section + course lookup", () =>
-    supabase.from("sections").select("course_id, institutional_crisis_resource, courses(program)").eq("id", SECTION).single(),
+  const section = await stage("section + course lookup", async () =>
+    await supabase.from("sections").select("course_id").eq("id", SECTION).single(),
   );
-  const courseId = (section.data as { course_id: string }).course_id;
+  const courseId = (section.data as { course_id: string } | null)!.course_id;
 
   const embedding = await stage("Voyage embed: raw API call, no queue", async () =>
     (await embed([MESSAGE], "query"))[0],
   );
 
-  const matched = await stage("match_knowledge_chunks (pgvector)", () =>
-    supabase.rpc("match_knowledge_chunks", {
+  const matched = await stage("match_knowledge_chunks (pgvector)", async () =>
+    await supabase.rpc("match_knowledge_chunks", {
       query_embedding: embedding,
       match_course_id: courseId,
       match_count: 5,

@@ -3518,3 +3518,92 @@ top of this file carries the current value.
 case-sensitive: a student typing `tcitest` will be told the code matches no
 section. Not a defect today, and deliberately not changed here, but it is a
 real usability edge on a string students type by hand.
+
+## Measured request latency, and two scoped items not fixed (2026-09-07, PM)
+
+Measured on real calls with `scripts/measure-request-stages.ts`, not
+estimated. Re-runnable.
+
+### Where the time actually goes, uncontended
+
+```
+isFollowUpOnTopic (Claude, SERIAL before embedding)   1630 ms
+Voyage slot check (Upstash round trip)                 186 ms
+can_access_section                                ~150 ms warm (453 cold)
+section + course lookup                                199 ms
+Voyage embed: raw API call, no queue                   190 ms
+match_knowledge_chunks (pgvector, 5 chunks)            169 ms
+classifyDistress (Claude, nominally concurrent)       2180 ms
+main generation (Sonnet 5, 574 output tokens)         5808 ms
+SERIAL TOTAL                                          7194 ms (empty history)
+```
+
+Consistent with the 8.5-14.5s ordinary requests in tonight's log.
+
+### VOYAGE RATE LIMIT: NEAR-TERM PRIORITY, NOT A SOMEDAY ITEM
+
+The free tier is 3 requests per 60 seconds, shared across the whole system
+via an Upstash sliding window. **Measured directly, by exhausting the window
+and timing the next slot: 48,079 ms of queue wait.** That is the 77s request
+in tonight's log: roughly 10s of real work plus roughly 67s of waiting.
+
+**This caps the system at roughly two to three concurrent users before a
+request hits a 48-second wait.** One person typing slowly rarely trips it.
+A class does so immediately, and everything built tonight is in service of
+eventually running real classes.
+
+**The fix is an account tier upgrade. It is not new engineering.** No code
+changes, no design decisions, no migration. It has been flagged before and
+never done.
+
+Note what the upgrade does NOT buy: the embedding call itself is 190 ms, so
+this will not make a typical question faster. It removes a cliff, and with
+it the current ceiling of about two concurrent users.
+
+### SCOPED ITEM (not fixed): 3.4 seconds of auxiliary model calls
+
+Deliberately not optimised tonight, at the owner's instruction.
+
+- **`classifyDistress` blocks ~1.8s.** It is described as concurrent, and
+  structurally it is: started early, awaited later. But the work it overlaps
+  with (embed + match) is only ~360 ms while the classifier is 2180 ms, so
+  ~1.8s of it is on the critical path. Concurrent in structure, not in
+  effect.
+- **`isFollowUpOnTopic` costs 1630 ms**, fully serial, before embedding, on
+  every message that has history.
+
+Together roughly 3.4s of an ~8.8s request spent on two model calls that
+produce no word the student reads.
+
+**Sequencing rule set by the owner:** the relevance gate's cost must NOT be
+addressed on its own. It has a separate known correctness weakness (the
+return-to-topic bridge phrase, standing item 2), and any change to its
+performance belongs in the same pass as whatever fixes that. Do not optimise
+one without the other.
+
+## Two defects found and fixed while testing chat history (2026-09-07, PM)
+
+**Reload left the app in an unselected state.** After a reload nothing was
+selected, which looked and behaved identically to "New conversation".
+Typing then silently started a new thread while the sidebar still showed the
+old ones. This caused a test to run against the wrong conversation twice,
+but the real cost is a student continuing a conversation and writing into a
+different one with no signal. Fixed both ways: the most recently active
+conversation is reopened on load, and the new-conversation control now
+renders as visibly selected when it is the active state, so "nothing
+selected" can never again look like "a thread selected".
+
+**Transcript order followed generation time, not send time.** Rows are
+written after the reply is generated, so a slow answer landed behind a
+faster message sent after it. Observed live: a 77s answer stored at
+20:40:11, after an exchange sent later and stored at 20:40:01. `created_at`
+is now stamped when the student's message ARRIVES and carried through to
+both rows.
+
+Second half of the same defect: both halves of an exchange share one
+timestamp, because they are one event, and the read query ordered on
+`created_at` alone. The tiebreak was whatever Postgres returned, and
+observed rows came back with the assistant's reply BEFORE the student's
+message. The transcript read now orders on role descending as a tiebreak,
+which puts 'user' first deterministically without inventing a millisecond of
+separation that did not happen.

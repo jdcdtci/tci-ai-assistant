@@ -346,6 +346,12 @@ export async function POST(request: NextRequest) {
   // from the retrieval path rather than merely validating one.
   const { message, section_id, history, conversation_id } = await request.json();
 
+  // Stamped here, at arrival, and carried through to the transcript rows.
+  // See recordExchangeTurns: writing happens after generation, so a default
+  // created_at would order the transcript by how long each answer took
+  // rather than by when the student sent it.
+  const receivedAt = new Date().toISOString();
+
   if (!message || !section_id) {
     return NextResponse.json({ error: "Both 'message' and 'section_id' are required." }, { status: 400 });
   }
@@ -437,6 +443,7 @@ export async function POST(request: NextRequest) {
             userText: message,
             assistantText,
             redacted,
+            receivedAt,
           });
         } catch (err) {
           // Backstop only. recordExchangeTurns records its own failures;

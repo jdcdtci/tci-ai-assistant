@@ -58,6 +58,10 @@ export default function Home() {
   // Which identity the section restore has already run for. See the effect
   // below: without it this fired three times on every load.
   const restoredForRef = useRef<string | null>(null);
+  // Whether the post-load auto-open has already happened for this section.
+  // loadConversations also runs after every send, and without this the
+  // sidebar would yank the view back on each reply.
+  const autoOpenedRef = useRef<string | null>(null);
 
   useEffect(() => {
     const supabase = getSupabaseBrowserClient();
@@ -126,14 +130,36 @@ export default function Home() {
       const data = await res.json();
       if (res.ok && Array.isArray(data.conversations)) {
         setConversations(data.conversations);
+        return data.conversations as ConversationSummary[];
       }
     } catch {
       // The transcript list is not required to hold a conversation.
     }
+    return [];
   }, []);
 
+  // On load, reopen the conversation that was most recently active.
+  //
+  // Previously the app came back from a reload with nothing selected, in the
+  // same state as "New conversation". Typing then silently started a new
+  // thread while the sidebar still showed the old ones, so a student
+  // continuing a conversation could be writing into a different one without
+  // any signal. That is not only a test-sequencing hazard; it loses the
+  // thread a student believes they are in.
   useEffect(() => {
-    if (section) void loadConversations(section.id);
+    if (!section) return;
+    const sectionId = section.id;
+
+    void (async () => {
+      const list = await loadConversations(sectionId);
+      if (autoOpenedRef.current === sectionId) return;
+      autoOpenedRef.current = sectionId;
+      // The list arrives ordered by updated_at desc.
+      if (list.length > 0) void openConversation(list[0].id);
+    })();
+    // openConversation is stable for this purpose: it only reads state
+    // setters and the id passed to it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [section, loadConversations]);
 
   useEffect(() => {
@@ -337,7 +363,9 @@ export default function Home() {
       <div className={styles.shell}>
         <aside className={styles.sidebar}>
           <button
-            className={styles.newConversation}
+            className={`${styles.newConversation} ${
+              conversationId === null ? styles.newConversationActive : ""
+            }`}
             onClick={startNewConversation}
             disabled={isLoading || (conversationId === null && messages.length === 0)}
           >

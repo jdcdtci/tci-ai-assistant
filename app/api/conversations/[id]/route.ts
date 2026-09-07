@@ -57,7 +57,13 @@ export async function GET(_request: NextRequest, ctx: RouteContext<"/api/convers
     .from("messages")
     .select("id, role, content, created_at, redacted_at")
     .eq("conversation_id", id)
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: true })
+    // Both halves of an exchange share one created_at, because they are one
+    // event. Without a tiebreak the order between them is whatever Postgres
+    // returns, which put the assistant's reply BEFORE the student's message
+    // in observed rows. Descending on role puts 'user' ahead of 'assistant'
+    // deterministically, without inventing timestamps that did not happen.
+    .order("role", { ascending: false });
 
   if (msgError) {
     return NextResponse.json({ error: "Could not load that transcript right now." }, { status: 503 });

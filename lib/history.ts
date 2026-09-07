@@ -124,17 +124,29 @@ export async function recordExchangeTurns(
     userText: string;
     assistantText: string;
     redacted: boolean;
+    // When the student's message ARRIVED, not when this write runs.
+    //
+    // These rows are written after the reply is generated, so a default
+    // created_at records generation-completion order rather than the order
+    // things happened on screen. A slow reply then lands behind a faster
+    // message the student sent later, and the transcript reads out of
+    // sequence. Observed live on 2026-09-07: a 77s answer was stored after
+    // an exchange sent well after it.
+    receivedAt: string;
   },
 ): Promise<void> {
-  const { conversationId, studentId, sectionId, userText, assistantText, redacted } = args;
+  const { conversationId, studentId, sectionId, userText, assistantText, redacted, receivedAt } = args;
 
-  const now = new Date().toISOString();
   const rows = (["user", "assistant"] as const).map((role) => ({
     conversation_id: conversationId,
     role,
     content: redacted ? null : role === "user" ? userText : assistantText,
-    redacted_at: redacted ? now : null,
+    redacted_at: redacted ? receivedAt : null,
     redaction_reason: redacted ? REDACTION_REASON : null,
+    // Both halves of one exchange share a timestamp on purpose: they are one
+    // event. Their relative order is settled by the read query ordering on
+    // role, not by inventing a millisecond of separation that did not exist.
+    created_at: receivedAt,
   }));
 
   try {
@@ -178,7 +190,7 @@ export async function recordExchangeTurns(
       .eq("id", conversationId)
       .maybeSingle();
 
-    const patch: Record<string, unknown> = { updated_at: now };
+    const patch: Record<string, unknown> = { updated_at: receivedAt };
     if (!conv?.title) patch.title = await deriveTitle(supabase, conversationId);
 
     await supabase.from("conversations").update(patch).eq("id", conversationId);
