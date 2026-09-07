@@ -54,6 +54,7 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [isLongWait, setIsLongWait] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const supabase = getSupabaseBrowserClient();
@@ -269,6 +270,9 @@ export default function Home() {
       clearTimeout(longWaitTimer);
       setIsLoading(false);
       setIsLongWait(false);
+      // Return the caret to the box so the next message can be typed
+      // straight away, including after switching conversations.
+      inputRef.current?.focus();
     }
   }
 
@@ -365,13 +369,21 @@ export default function Home() {
               </div>
             )}
           </div>
+          {/*
+            The input is deliberately NOT disabled while a reply is in
+            flight. A student should be able to keep typing the next thing
+            rather than wait, and disabling also blurs the field, which was
+            taking the caret away mid-thought. Enter during a reply is
+            ignored by handleSubmit and the draft is preserved; only the
+            Send button is disabled, so nothing can be submitted twice.
+          */}
           <form className={styles.inputRow} onSubmit={handleSubmit}>
             <input
+              ref={inputRef}
               className={styles.input}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder="Type a message…"
-              disabled={isLoading}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();
