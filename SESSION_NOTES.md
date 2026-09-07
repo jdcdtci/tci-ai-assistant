@@ -73,10 +73,25 @@ only be run locally today.
 
 ## WHAT IS DEPLOYED AND CONFIRMED
 
-Production is at commit **`c50fb22`**, deployment
-`dpl_ALxD3bptRChoHciYEG4onWeUa45p`, confirmed serving
-`tci-ai-assistant.vercel.app`. The whole site sits behind a temporary HTTP
-Basic `SITE_PASSWORD` gate. This is deliberate, not a bug.
+Production is at commit **`5f48d9e`**, deployment
+`dpl_Dgxsi6JCqrpS6P6mMLE5JmLGY7Gq`, deployed 2026-09-07 19:39 UTC. Verified by
+resolving the alias rather than by the build reporting success: `vercel
+inspect tci-ai-assistant.vercel.app` returns that deployment id, so it is
+promoted and not merely built. (Previous production was `c50fb22` /
+`dpl_ALxD3bptRChoHciYEG4onWeUa45p`.)
+
+The whole site sits behind a temporary HTTP Basic `SITE_PASSWORD` gate. This
+is deliberate, not a bug. Confirmed live after this deploy: `/`, `/api/chat`
+and `/api/enroll` all return 401 with `www-authenticate: Basic realm="TCI
+Assistant"`.
+
+**The join code is `TCITEST`.** It lives only in the database, never in
+application source, and there is one Supabase project behind both local and
+production, so production reads the same row local does. `A4D3KAWR` now
+resolves to no section. Note this cannot be exercised end to end on
+production today: completing a sign-in there is impossible until standing
+item 1 is fixed, so `/api/enroll` is unreachable on production regardless of
+which code is correct.
 
 Applied and verified live:
 - **Sections and `section_staff`.** A course now has sections; each carries its
