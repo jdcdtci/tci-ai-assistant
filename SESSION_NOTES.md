@@ -1,11 +1,199 @@
 # Session Notes
 
-Last updated: 2026-08-31. This project spans many sessions over days, not one
-sitting. This file exists so a fresh session (or a future you with a fresh
-context window) can pick up accurately without re-deriving decisions already
-made. Treat it as a snapshot, not a live source of truth — always verify
-against `git status`, `git log`, and the actual Supabase project before
-acting on anything stated here.
+> **HANDOFF NOTES live at the top of this file, newest first.** They are
+> addressed to a new build thread starting cold. Everything below them is the
+> running log, in rough chronological order. If a handoff note and the running
+> log disagree, the newest handoff note wins, but verify against the database
+> and `git log` before acting on either.
+
+---
+
+# HANDOFF NOTE — 2026-09-07, 11:39 PDT (18:39 UTC)
+
+**This is the most recent handoff note. No earlier ones exist; this is the
+first.**
+
+You are picking up a real, live, partially-built system. Read this whole note
+before touching anything.
+
+## THE ONE THING THAT MUST HAPPEN FIRST
+
+**A signed-in browser test has NOT been run against the current build, and
+nothing else should proceed until it has.**
+
+Everything shipped last night was verified by automation: the site password
+gate, the 401-not-503 check proving `can_access_section` resolves, the
+distress override returning a crisis response with no session, every schema
+check, and the audit trigger correctly rejecting an unattributed write. All
+of that passed live against production.
+
+But the human path was never walked. Nobody has signed in with Google, entered
+the join code, asked an ordinary question, and asked a distress-level
+question, on the current code. **Do not record this work as closed, verified,
+or done.** The automated checks cover the failure-closed paths; they do not
+cover the path a real student actually takes, which requires a session that
+cannot be obtained without a real Google sign-in.
+
+**Production is stable and safe to leave exactly as it is.** There is no
+outage, nothing is half-applied, and no student can reach the system (see
+access state below). This is an outstanding verification, not an incident.
+
+**First action in the new thread:** either walk Josh through the local UI test
+or confirm he has run it. Locally:
+
+```
+cd ~/tci-ai-assistant && SITE_PASSWORD= npm run dev
+```
+
+Then at `http://localhost:3000`: sign in with Google, enter join code
+`A4D3KAWR`, ask an ordinary content question (expect a grounded answer), then
+ask a distress-level question (expect the fixed crisis text with 988). The
+browser now sends `section_id` and no longer sends `student_id` at all.
+
+Note: production sign-in is broken (see standing items), so this test can only
+be run locally today.
+
+## WHAT IS DEPLOYED AND CONFIRMED
+
+Production is at commit **`c50fb22`**, deployment
+`dpl_ALxD3bptRChoHciYEG4onWeUa45p`, confirmed serving
+`tci-ai-assistant.vercel.app`. The whole site sits behind a temporary HTTP
+Basic `SITE_PASSWORD` gate. This is deliberate, not a bug.
+
+Applied and verified live:
+- **Sections and `section_staff`.** A course now has sections; each carries its
+  own dates, join code, access mode, crisis resource, and staff. Course
+  content stays shared across all sections. Roles are `professor` and `staff`
+  (multi-assignee, immediate) and `escalation_recipient` and
+  `wellbeing_reader` (single-assignee, acceptance required, enforced by
+  partial unique indexes on accepted rows only).
+- **`section_staff_audit`** with an actor-required trigger: a role change that
+  does not declare `app.actor_email` is **rejected**, not recorded anonymously.
+  Any code writing to `section_staff` must `set app.actor_email` first.
+- **The retention-clock fix.** `purge_distress_events` now keys off section
+  close rather than each event's own age. The old clock would have nulled
+  crisis text mid-term on any term longer than 30 days, while the wellbeing
+  reader still carried a standing obligation to read it.
+- **Entitlement**: `can_access_section` decides access in the database.
+  `/api/chat` verifies the session, takes `section_id`, and derives
+  `course_id` server-side. It no longer reads `student_id` from the request
+  body at all.
+- **Distress detection and response**, fully wired: a five-level classifier
+  plus an independent `interpersonal_harm` signal; fixed BeThe1To-sourced text
+  for crisis and possible-risk; a generated reflection plus fixed text for
+  personal distress; a first-versus-repeat crisis distinction; and an override
+  that serves distress responses regardless of session or entitlement, while
+  ordinary questions still require both.
+- **Persona layer** (per-program voice) and the **warmth-without-authority
+  guardrail**.
+- **Assessment-scope retrieval exclusion**, closing a reproduced leak.
+- **`memory_write_failures`**: interaction-history writes that silently fail
+  now leave a durable, queryable record.
+
+Current data state: 1 course (MKTG365), 1 section, 3 accepted staff rows all
+held by Josh, **0 enrollments**, 0 distress events, 0 memory-write failures,
+6 pre-existing interaction-history rows.
+
+## WHAT IS SPECCED BUT NOT STARTED
+
+Build in this order. The dependencies are real, not preferences.
+
+1. **Student-facing chat history** — verbatim multi-thread conversations for
+   the duration of a section, scoped through `can_access_section`, never a
+   plain fetch by student id. Distress-classified turns are **not stored in
+   `messages` at all**, marker only; that content lives solely in
+   `distress_events`. The redaction predicate is `level >= personal_distress`
+   **OR** `interpersonal_harm`, and it covers the assistant's crisis-response
+   text as well as the student's message. **Must ship with an interim
+   delete-only purge** at section close plus 30 days, because the export that
+   would otherwise delete transcripts is two steps later and raw student text
+   would accumulate with no deletion path.
+2. **Email delivery channel** — no mail dependency exists. This is now a
+   shared foundation: both escalation notification and the professor
+   invitation flow need it. Build it once, deliberately.
+3. **Professor access subsystem** — invitation by email with sign-in through
+   the existing Google auth; the invite link must be a **claim token that
+   grants nothing on its own**, never a magic link, since a magic link is a
+   bearer credential in an email. General dashboard access is multi-person;
+   the two safety roles are single-assignee and require the named person's
+   affirmative acceptance, so naming someone is a proposal, not an
+   appointment. Removal of the sole accepted holder is blocked while a section
+   is open. Plus the section switcher.
+4. **Storage and `.md` export** — retention is: student loses access at
+   section close, raw retained 30 days for professor review, exported
+   automatically, **raw deleted at export**, file deleted 120 days after
+   export. A section with a null `ends_at` retains indefinitely and must
+   surface as a visible warning (`sections_needing_attention` already does
+   this). Note `pg_cron` cannot delete storage objects.
+
+**Hard sequencing gates:** email (2) before the professor subsystem (3), and
+**production Google sign-in must be fixed before (3) begins in earnest** —
+that work cannot be meaningfully tested without it, and building it to
+completion unverified is the exact trap that left last night's work with an
+outstanding human check.
+
+**Honest sizing:** the professor subsystem was originally estimated as the
+smallest of three prerequisites. That was wrong. It is an identity,
+invitation, consent, and audit subsystem, plausibly the largest workstream
+queued.
+
+## TWO STANDING ITEMS THAT PREDATE LAST NIGHT
+
+**1. Production Google sign-in is broken for everyone.** Diagnosed, fix ready,
+not applied. Supabase's Auth **Site URL is `http://localhost:3000`** and the
+production callback was never allowlisted, so anyone completing sign-in on
+production is redirected to localhost. Evidence is in `auth.flow_state`.
+Neither Google Cloud nor the app code is at fault. Fix, in the Supabase
+dashboard under Authentication → URL Configuration: set **Site URL** to
+`https://tci-ai-assistant.vercel.app`, add
+`https://tci-ai-assistant.vercel.app/**` to Redirect URLs, and **keep**
+`http://localhost:3000/**`. Only Josh can apply this.
+
+**2. The relevance gate is defeated by a return-to-topic bridge phrase.**
+Sending "**Going back to the course material,** ..." after an off-topic detour
+makes `isFollowUpOnTopic` return `follow_up=true`, pulls stale context into
+retrieval, and produces a wrong answer claiming the material lacks content it
+demonstrably has. The identical question without the phrase answers correctly.
+The gate contradicts its own tool description, which says to return false for
+a message returning to an earlier topic after a detour. **Deliberately not
+fixed**: one observation is not a characterised failure mode, and Section 13.4
+forbids tuning without usage data. Precision that matters: it does **not**
+reproduce without history — the gate is never invoked when `priorTurns` is
+empty. Do not go looking for a history-independent reproduction.
+
+## HOW THIS PROJECT WORKS
+
+- **Deployment is always a manual `vercel --prod`.** Auto-deploy is off on
+  purpose. The CLI is not installed; use
+  `npx vercel@latest --prod --yes --scope jdcdtcis-projects`. The bare command
+  fails with "Not authorized" because `.vercel/project.json` carries a stale
+  `orgId`.
+- **Any change to an API route's contract needs a UI-level test**, not just
+  curl. This rule exists because curl-only testing once missed a bug that
+  broke the live chat UI for weeks.
+- **Never print secrets.** Inspect `.env.local` by name only
+  (`grep -o "^[A-Z_]*=" .env.local`), never `cat`. If a verification step
+  needs a credential, hand Josh a manual step rather than putting a token in
+  the transcript.
+- **Safety guarantees belong in the database**, not application code: RLS,
+  CHECK constraints, triggers, and SQL functions, verified live via
+  `pg_policies` / `pg_get_functiondef` rather than assumed from a migration
+  file.
+- **A live course's `access_mode` must not be changed for testing without
+  asking Josh first**, even briefly, even with an immediate revert.
+- There is **one Supabase project** serving both local and production. There
+  is no staging. Migrations apply directly to the database production uses.
+
+---
+
+# Running log
+
+Everything below is the running log, oldest sections first, with later work
+appended. Last substantive update 2026-09-07. This project spans many sessions
+over days, not one sitting. Treat this as a snapshot, not a live source of
+truth — always verify against `git status`, `git log`, and the actual Supabase
+project before acting on anything stated here. Where the running log and the
+handoff note above disagree, the handoff note is newer.
 
 There are two unrelated "Step N" numbering schemes used in commit history
 and prior conversation — don't conflate them:
