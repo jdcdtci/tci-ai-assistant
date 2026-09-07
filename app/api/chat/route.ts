@@ -213,6 +213,13 @@ Adapt. If the student's answer to a check was wrong or confused, do not simply r
 
 Formatting rules: never use em dashes anywhere in your response. Never use bold text. Write in plain prose only.`;
 
+// Log fragment only, never used in a decision. Present for crisis and absent
+// otherwise, so the log never implies the flag governed a level it does not:
+// possible_risk ignores crisisAlreadyRaised entirely.
+function repeatField(level: string, crisisAlreadyRaised: boolean): string {
+  return level === "crisis" ? ` repeat=${crisisAlreadyRaised}` : "";
+}
+
 // Writes the distress event and decides, at write time, whether it crossed a
 // notification threshold. Computed here rather than by each reader so the
 // review tool and any future delivery channel agree by construction instead
@@ -422,12 +429,14 @@ export async function POST(request: NextRequest) {
         classification: refusedDistress,
       });
 
+      const crisisAlreadyRaisedForRefused = hasCrisisAlreadyBeenRaised(priorTurns);
+
       console.warn(
-        `[access] refused section=${section_id} session=${verifiedEmail ? "yes" : "none"} but served distress response level=${refusedDistress.level} harm=${refusedDistress.interpersonal_harm} section_attached=${realSection ? "yes" : "no"}`,
+        `[access] refused section=${section_id} session=${verifiedEmail ? "yes" : "none"} but served distress response level=${refusedDistress.level}${repeatField(refusedDistress.level, crisisAlreadyRaisedForRefused)} harm=${refusedDistress.interpersonal_harm} section_attached=${realSection ? "yes" : "no"}`,
       );
 
       const fixedForRefused = fixedDistressResponse(refusedDistress.level, {
-        crisisAlreadyRaised: hasCrisisAlreadyBeenRaised(priorTurns),
+        crisisAlreadyRaised: crisisAlreadyRaisedForRefused,
         // Deliberately omitted. institutional_crisis_resource is the one
         // course-derived value in a distress response, and this caller has
         // not been shown to be entitled to this course. The 988 baseline is
@@ -566,13 +575,22 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    const crisisAlreadyRaised = hasCrisisAlreadyBeenRaised(priorTurns);
+
     const fixed = fixedDistressResponse(distress.level, {
-      crisisAlreadyRaised: hasCrisisAlreadyBeenRaised(priorTurns),
+      crisisAlreadyRaised,
       institutionalResource: section.institutional_crisis_resource,
     });
 
     if (fixed) {
-      console.log(`[distress] level=${distress.level} responded with fixed text`);
+      // repeat= distinguishes the full first-crisis script from the brief
+      // recurrence text. Without it this line is identical for both branches
+      // and which one fired can only be established by reading the reply,
+      // which is not evidence a log can carry. Emitted only for crisis,
+      // because that is the only level whose output the flag governs.
+      console.log(
+        `[distress] level=${distress.level}${repeatField(distress.level, crisisAlreadyRaised)} responded with fixed text`,
+      );
       return NextResponse.json({ response: fixed });
     }
 
