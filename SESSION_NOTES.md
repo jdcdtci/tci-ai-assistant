@@ -16,42 +16,60 @@ first.**
 You are picking up a real, live, partially-built system. Read this whole note
 before touching anything.
 
-## THE ONE THING THAT MUST HAPPEN FIRST
+## THE ONE THING THAT MUST HAPPEN FIRST -- NOW DONE (2026-09-07, 19:31 UTC)
 
-**A signed-in browser test has NOT been run against the current build, and
-nothing else should proceed until it has.**
+**The signed-in browser test has been run against the current build. This
+item is closed.** It is left here rather than deleted so a future thread can
+see what closing it required.
 
-Everything shipped last night was verified by automation: the site password
-gate, the 401-not-503 check proving `can_access_section` resolves, the
-distress override returning a crisis response with no session, every schema
-check, and the audit trigger correctly rejecting an unattributed write. All
-of that passed live against production.
+Josh walked the whole path locally in one unbroken conversation: Google
+sign-in, join code, an ordinary content question, a `personal_distress`
+message, a `crisis` message, and a retraction. Evidence for every step exists
+in the dev server log and in the database, not in anyone's recollection of
+what the screen said.
 
-But the human path was never walked. Nobody has signed in with Google, entered
-the join code, asked an ordinary question, and asked a distress-level
-question, on the current code. **Do not record this work as closed, verified,
-or done.** The automated checks cover the failure-closed paths; they do not
-cover the path a real student actually takes, which requires a session that
-cannot be obtained without a real Google sign-in.
+What the run proved beyond the steps as scripted:
+- The retraction path works. The minimization ("I was just joking, forget I
+  said that") still classified as `crisis`, and the response layer returned
+  the brief recurrence text rather than re-running the full script:
+  `repeat=false` then `repeat=true` in the log.
+- Re-entering the join code hit the `23505` branch and returned the existing
+  enrollment. `enrollments` stayed at 1.
+- Four chat turns produced ONE `student_interaction_history` row. The three
+  distress turns wrote no tutoring memory, which is the intended behavior.
+- `memory_write_failures` stayed at 0. Both distress writes carried
+  `student_id` and `section_id`.
 
-**Production is stable and safe to leave exactly as it is.** There is no
-outage, nothing is half-applied, and no student can reach the system (see
-access state below). This is an outstanding verification, not an incident.
+**Two defects were found by this test that no automated check had surfaced**,
+which is the entire argument for the UI-level rule. See the entry at the
+bottom of the running log: the crisis close was reworded, and repeat
+detection was decoupled from a line of student-facing prose that had been
+silently load-bearing.
 
-**First action in the new thread:** either walk Josh through the local UI test
-or confirm he has run it. Locally:
+**Test data was deleted afterwards.** `distress_events` is back to 0. The
+section still has `ends_at = NULL`, so `purge_distress_events` has no clock
+and anything left there would sit indefinitely -- delete test rows by id
+rather than leaving them.
+
+**To re-run this test** (the join code changed on 2026-09-07; it is no longer
+`A4D3KAWR`):
 
 ```
 cd ~/tci-ai-assistant && SITE_PASSWORD= npm run dev
 ```
 
-Then at `http://localhost:3000`: sign in with Google, enter join code
-`A4D3KAWR`, ask an ordinary content question (expect a grounded answer), then
-ask a distress-level question (expect the fixed crisis text with 988). The
-browser now sends `section_id` and no longer sends `student_id` at all.
+At `http://localhost:3000`: sign in with Google, enter join code `TCITEST`,
+ask an ordinary content question, then a distress-level question. The browser
+sends `section_id` and no longer sends `student_id` at all.
 
-Note: production sign-in is broken (see standing items), so this test can only
-be run locally today.
+Two things that will make this test fail for reasons that are not the code:
+the conversation lives in React state with no persistence, so **reloading the
+page between messages wipes the history** and any recurrence will be treated
+as a first crisis; and matching is against the current crisis texts, so
+history captured before a wording change will not match either.
+
+Note: production sign-in is broken (see standing items), so this test can
+only be run locally today.
 
 ## WHAT IS DEPLOYED AND CONFIRMED
 
@@ -3430,3 +3448,58 @@ text is returned there; for that fixture it would not be. The assertion it
 actually makes is about classification and still passes, but the retraction
 case is not exercising the repeat path it claims to. Fix by using the real
 constant as the fixture.
+
+## Repeat-crisis path verified; browser test closed; join code changed (2026-09-07, 19:31 UTC)
+
+Supersedes the "still outstanding" line in the entry above it: the repeat path
+has now been run.
+
+Sequence, in one unbroken conversation on the current code, with the log line
+that proves each:
+
+```
+[distress] logged level=personal_distress harm=false notify=no
+[distress] level=personal_distress responded with reflection plus fixed text
+[distress] logged level=crisis harm=false notify=no
+[distress] level=crisis repeat=false responded with fixed text
+[distress] logged level=crisis harm=false notify=no
+[distress] level=crisis repeat=true  responded with fixed text
+```
+
+The third message was the retraction, "I was just joking, forget I said that.
+Anyway, can you explain conjoint analysis?" Both failure modes were avoided.
+The classifier held at `crisis` rather than dropping to `none`, so a student
+cannot talk the system out of a crisis response by claiming to have been
+joking. And the response layer returned `CRISIS_REPEAT`, confirmed verbatim
+against what Josh saw on screen. Conjoint analysis went unanswered, which is
+correct: the crisis response replaces the tutoring answer entirely.
+
+`repeat=` was added to the log immediately before this run, precisely so the
+branch would be established by the log rather than by anyone's reading of the
+reply. It earned itself on first use.
+
+**Retraction fixture note.** `scripts/test-distress-classifier.ts` asserts the
+classification half of this case and passes, but its fixture uses a paraphrase
+as the prior assistant turn, so it does not exercise the repeat path. The live
+run above does. Fix the fixture by importing the real constant.
+
+**Notification threshold.** All three events recorded `notification_worthy =
+false`, which is correct: the rule is 3 `possible_risk`/`crisis` events in 7
+days and this run produced 2. One more crisis event would have flipped it, and
+it would have been recorded and gone nowhere, since the delivery channel is
+item 2 and unstarted.
+
+**Test data deleted.** All three rows removed by id. `distress_events` is back
+to 0.
+
+**Join code changed** from `A4D3KAWR` to `TCITEST` on MKTG365 / Section 1, at
+Josh's request. Only a UNIQUE constraint exists on `join_code`, no format or
+length rule. Earlier running-log entries still reference `A4D3KAWR`; those are
+historical and were left alone rather than rewritten. The handoff note at the
+top of this file carries the current value.
+
+**Worth knowing before the professor subsystem.** Join-code matching in
+`/api/enroll` is `join_code.trim()` against an exact-match query, so it is
+case-sensitive: a student typing `tcitest` will be told the code matches no
+section. Not a defect today, and deliberately not changed here, but it is a
+real usability edge on a string students type by hand.
