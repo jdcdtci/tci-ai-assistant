@@ -131,16 +131,18 @@ held by Josh, **0 enrollments**, 0 distress events, 0 memory-write failures,
 
 Build in this order. The dependencies are real, not preferences.
 
-1. **Student-facing chat history** — verbatim multi-thread conversations for
-   the duration of a section, scoped through `can_access_section`, never a
-   plain fetch by student id. Distress-classified turns are **not stored in
-   `messages` at all**, marker only; that content lives solely in
-   `distress_events`. The redaction predicate is `level >= personal_distress`
-   **OR** `interpersonal_harm`, and it covers the assistant's crisis-response
-   text as well as the student's message. **Must ship with an interim
-   delete-only purge** at section close plus 30 days, because the export that
-   would otherwise delete transcripts is two steps later and raw student text
-   would accumulate with no deletion path.
+1. ~~**Student-facing chat history**~~ — **BUILT AND VERIFIED 2026-09-07.
+   Committed to main, NOT YET DEPLOYED.** See the closure entry at the bottom
+   of the running log. Shipped as specified: multi-thread transcripts scoped
+   through `can_access_section`, distress turns never stored in `messages`
+   (uniform marker only, with a CHECK permitting exactly one marker value so
+   no level can ever be recorded), and the interim delete-only purge at
+   section close plus 30 days.
+
+   **The migration is already applied to the database, which production
+   shares.** That is safe: it is purely additive, so the currently deployed
+   code (`5f48d9e`) neither knows nor needs the new tables. Deploying the
+   application half is a separate, still-outstanding step.
 2. **Email delivery channel** — no mail dependency exists. This is now a
    shared foundation: both escalation notification and the professor
    invitation flow need it. Build it once, deliberately.
@@ -3607,3 +3609,110 @@ observed rows came back with the assistant's reply BEFORE the student's
 message. The transcript read now orders on role descending as a tiebreak,
 which puts 'user' first deterministically without inventing a millisecond of
 separation that did not happen.
+
+---
+
+## CLOSED: student-facing chat history (2026-09-07, 20:55 UTC)
+
+Built, verified end to end through the browser, test data cleared.
+**Committed to main and NOT deployed.** Production remains `5f48d9e`.
+
+### What exists
+
+Three tables (`conversations`, `messages`, `history_write_failures`), three
+functions, one trigger, two cron jobs, four API routes, and the sidebar UI.
+The migration is applied to the live database. It is purely additive, so the
+deployed code predates it harmlessly.
+
+Redaction is structural, not procedural. `messages.redaction_reason` has a
+CHECK permitting exactly one string, so no distress level can ever be
+recorded there by any present or future call site. A CHECK makes a redacted
+row carrying content impossible. `conversations.student_id` is NOT NULL,
+which is what guarantees the anonymous path persists nothing.
+
+### The verification that mattered, and why it took four attempts
+
+Step 7 was: reopen a conversation whose crisis exists ONLY in
+`distress_events`, then send a crisis message. It is the case the whole
+`crisis_already_raised` design exists for, because restored history has holes
+exactly where the crisis text would be, so the old string match would return
+false and serve the FULL script to a student whose crisis is already on
+record.
+
+It failed to run three times, twice because the app came back from a reload
+with nothing selected and typing silently started a new thread. That was a
+real defect, not a test-sequencing problem, and it is now fixed.
+
+On the fourth attempt, confirmed: conversation `1d67096c` went 10 to 12
+turns with redacted 8 to 10 and content unchanged at 2, zero
+`POST /api/conversations`, one `GET /api/enrollment`, and the log read
+`[distress] level=crisis repeat=true responded with fixed text`.
+
+### Three defects found and fixed during this work
+
+**A bug I introduced and caught before it ran anywhere.**
+`recordDistressEvent` was awaited BEFORE the first-versus-repeat check. That
+was harmless while the check matched conversation history, which cannot
+contain the current turn. It is not harmless when the check reads
+`distress_events`: the current crisis was already written, so the check found
+it and reported a repeat on a student's FIRST disclosure, serving the brief
+text with no 911 line and no recording caveat. Order is now check, record,
+respond, and the comment says the ordering is load-bearing.
+
+**Reload left the app unselected.** Fixed both ways rather than one: the most
+recently active conversation reopens on load, and the new-conversation
+control renders as visibly selected when it is the active state, so "nothing
+selected" can never again look like "a thread selected".
+
+**Transcript order followed generation time, not send time.** A 77s answer
+was stored after an exchange sent later. `created_at` is now stamped at
+message arrival. Second half of the same defect: both halves of an exchange
+share one timestamp because they are one event, and the read ordered on
+`created_at` alone, so observed rows returned the assistant BEFORE the
+student. The read now tiebreaks on role descending.
+
+### Still outstanding for this feature
+
+Deploy it. Everything above is verified locally against the shared database;
+none of it is on production.
+
+---
+
+## NEW ITEM: Voyage free tier caps the system at 2-3 concurrent users
+
+**Near-term priority, not a someday item.** Everything built tonight is in
+service of running real classes, and this is the ceiling that stops that.
+
+Measured, not estimated, by exhausting the window and timing the next slot:
+**48,079 ms of queue wait.** The free tier allows 3 requests per 60 seconds
+shared across the whole system. That is the 77s request in tonight's log:
+roughly 10s of work plus roughly 67s of waiting.
+
+One person typing slowly rarely trips it. Two or three students typing at
+once trip it immediately, and the cliff stops being the tail case.
+
+**The fix is an account tier upgrade. It is not new engineering.** No code,
+no design decisions, no migration.
+
+What it does NOT buy: the embedding call itself is 190 ms, so this will not
+make a typical question faster. It removes a cliff.
+
+---
+
+## NEW ITEM (scoped, not started): 3.4s per request of auxiliary model calls
+
+- `classifyDistress` blocks about **1.8s**. It is structurally concurrent,
+  started early and awaited later, but the work it overlaps with (embed plus
+  match) is only about 360 ms against a 2180 ms classifier. Concurrent in
+  structure, not in effect.
+- `isFollowUpOnTopic` costs **1630 ms**, fully serial, before embedding, on
+  every message with history.
+
+About 3.4s of an ~8.8s request, spent on two model calls producing no word
+the student reads. Full stage breakdown is in the latency entry above and
+re-runnable via `scripts/measure-request-stages.ts`.
+
+**Sequencing rule set by the owner: do NOT address the relevance gate's cost
+on its own.** It has a separate known correctness weakness (the
+return-to-topic bridge phrase, standing item 2). Any change to its
+performance belongs in the same pass as whatever fixes that.
