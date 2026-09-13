@@ -73,6 +73,14 @@ records each purge on their own schedule via `pg_cron`, independently of one
 another — deliberately, so that redacting content from one place (say,
 `messages`) never depends on remembering to also redact it from another.
 
+**A four-tier access structure exists in spec** — student, section-scoped
+faculty dashboard, institution administration, and TCI's own operator
+backend — with only the student tier and pieces of the section-scoped tier
+built so far. See
+[`TCI_AI_Teaching_Assistant_Spec_v3_8.md`](./TCI_AI_Teaching_Assistant_Spec_v3_8.md)
+for what each tier is and does; that detail is not duplicated here for the
+same reason build status isn't.
+
 ## Running locally
 
 ```bash

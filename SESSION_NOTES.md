@@ -16,6 +16,14 @@ first.**
 You are picking up a real, live, partially-built system. Read this whole note
 before touching anything.
 
+**The product specification now lives in this repository too:**
+[`TCI_AI_Teaching_Assistant_Spec_v3_8.md`](./TCI_AI_Teaching_Assistant_Spec_v3_8.md),
+placed alongside this file on 2026-09-13. It is the source of truth for
+product requirements, wireframes, and the reasoning behind them; this file
+remains the source of truth for build status, what is deployed, and what is
+next. Where the two overlap, the spec states what should exist and this
+file states what actually does.
+
 ## THE ONE THING THAT MUST HAPPEN FIRST -- NOW DONE (2026-09-07, 19:31 UTC)
 
 **The signed-in browser test has been run against the current build. This
@@ -175,12 +183,52 @@ Build in this order. The dependencies are real, not preferences.
    export. A section with a null `ends_at` retains indefinitely and must
    surface as a visible warning (`sections_needing_attention` already does
    this). Note `pg_cron` cannot delete storage objects.
+5. **Institution administration** (spec §11.5, first specified v3.8) — a
+   tier between the section-scoped faculty dashboard (§11.2) and the
+   operator backend (§12), scoped to one licensee across every course it
+   licenses. **Confirmed real, not speculative:** La Sierra already
+   licenses the TCI Undergraduate Business Catalog and the TCI MBA Catalog
+   simultaneously; Burman and PUC are queued next for the same
+   relationship.
 
-**Hard sequencing gates:** email (2) before the professor subsystem (3), and
+   **Requires a genuine schema change**, unlike most of this build: an
+   `institutions` table and a required `courses.institution_id` FK with a
+   backfill, since `courses` today has no owner at all — no
+   `institution_id`, no `institutions` table, nothing recording which
+   licensee a course belongs to. `institution_staff` should follow
+   `section_staff`'s proven accepted-pending, actor-audited pattern, scoped
+   to `institution_id` instead of `section_id`, not a new pattern invented
+   for a fourth role.
+
+   **Capability model, resolved.** Institution admin can unconditionally
+   create new professor accounts within its own institution. Editing any
+   specific course defaults to read-only, structurally, and requires that
+   course's own professor to affirmatively grant institution admin access
+   to it — there is no institution-wide setting that opens every course
+   under a licensee at once, and the absence of a grant means the course
+   stays closed regardless of anything else. TCI-level access remains
+   unconditional in both directions, no grant required.
+
+   **One open question, by design, unresolved:** whether TCI wants a built
+   interface for its own top-level, all-clients view now that institutions
+   exist as a real entity, or whether that stays direct database access as
+   it has throughout this build. To be resolved before any
+   institution-admin migration is written — a real, stated answer, not a
+   default assumed by proceeding.
+
+   **Spec only, nothing built.** A draft, unapplied migration
+   (`supabase/migrations/20260913_create_institutions.sql`) exists locally
+   from investigating this front before the spec landed. It is deliberately
+   uncommitted and untouched: this tier does not get built until the spec's
+   own open question above is answered.
+
+**Hard sequencing gates:** email (2) before the professor subsystem (3);
 **production Google sign-in must be fixed before (3) begins in earnest** —
 that work cannot be meaningfully tested without it, and building it to
 completion unverified is the exact trap that left last night's work with an
-outstanding human check.
+outstanding human check; and institution administration (5) additionally
+depends on (3) existing, since granting institution admin access to a
+course is an act only a course's own professor can take.
 
 **Honest sizing:** the professor subsystem was originally estimated as the
 smallest of three prerequisites. That was wrong. It is an identity,
