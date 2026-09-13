@@ -25,7 +25,33 @@ import { Resend } from "resend";
 // narrowly-typed function beside this one. It does not get a generic sender,
 // and this type does not grow a free-text field.
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+// Constructed lazily, not at module scope.
+//
+// The Resend SDK throws in its constructor when the API key is missing, and
+// that used to run at MODULE EVALUATION -- `const resend = new
+// Resend(process.env.RESEND_API_KEY)` at the top of this file. An unset key
+// then crashed every import of this module before any of its exports were
+// even reachable, which took the sweep route down with a 500 on every call.
+// Worse than the runtime cost of an ordinary error: lib/notifications.ts's
+// own `configured` check, which exists specifically to degrade gracefully
+// and record a `not_configured` failure instead of crashing, never got the
+// chance to run, because the crash happened one import earlier. Found by
+// actually calling the route rather than by reading the code.
+//
+// Lazy construction means importing this file is always safe. The key is
+// read, and can fail, only at the moment a send is actually attempted --
+// which lib/notifications.ts already gates behind its own configuration
+// check, so in the unconfigured case this constructor is never reached at
+// all.
+let resendClient: Resend | null = null;
+function getResendClient(): Resend {
+  if (!resendClient) {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) throw new Error("RESEND_API_KEY is not set");
+    resendClient = new Resend(apiKey);
+  }
+  return resendClient;
+}
 
 /**
  * Everything an escalation email is permitted to say.
@@ -88,7 +114,7 @@ export async function sendEscalationNotice(
     `for this section.`,
   ];
 
-  const { data, error } = await resend.emails.send({
+  const { data, error } = await getResendClient().emails.send({
     from,
     to: notice.recipientEmail,
     subject: `Wellbeing notification: ${notice.courseName} ${notice.sectionLabel}`,
