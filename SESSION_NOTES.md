@@ -143,9 +143,24 @@ Build in this order. The dependencies are real, not preferences.
    shares.** That is safe: it is purely additive, so the currently deployed
    code (`5f48d9e`) neither knows nor needs the new tables. Deploying the
    application half is a separate, still-outstanding step.
-2. **Email delivery channel** — no mail dependency exists. This is now a
-   shared foundation: both escalation notification and the professor
-   invitation flow need it. Build it once, deliberately.
+2. ~~**Email delivery channel**~~ — **BUILT AND VERIFIED 2026-09-12/13,
+   PENDING REAL SEND.** See the closure entry near the bottom of the running
+   log. The sweep, the sender, the endpoint, and the middleware exemption are
+   committed to main (`9af0db7`) and exercised end to end against the real
+   database and the real route: unauthenticated request when the sweep
+   secret is unset (404), wrong bearer with the secret set (401),
+   `pending_escalations` read through the actual route with real
+   `distress_events` (correct student, correct recipient, correct count),
+   and the `not_configured` failure path with its six-hour rate limit
+   actually enforced across repeated calls, not just present in the code.
+
+   **What is NOT yet verified: an actual delivered email.** That needs
+   Josh's own Resend account, a verified sender domain, and four environment
+   variables (`RESEND_API_KEY`, `NOTIFY_FROM_ADDRESS`, `NOTIFY_SIGN_IN_URL`,
+   `NOTIFY_SWEEP_SECRET`) plus two Supabase Vault secrets
+   (`notify_sweep_url`, `notify_sweep_secret`) that only he can set up. This
+   is now the one thing gating the professor invitation flow's own email
+   need, per the hard sequencing gate below, which still holds.
 3. **Professor access subsystem** — invitation by email with sign-in through
    the existing Google auth; the invite link must be a **claim token that
    grants nothing on its own**, never a magic link, since a magic link is a
@@ -3716,3 +3731,124 @@ re-runnable via `scripts/measure-request-stages.ts`.
 on its own.** It has a separate known correctness weakness (the
 return-to-topic bridge phrase, standing item 2). Any change to its
 performance belongs in the same pass as whatever fixes that.
+
+## CLOSED (pending live send): escalation notification email (2026-09-12/13)
+
+Built, verified end to end against the real database and the real route,
+committed to main as `9af0db7` (plus the schema in an earlier commit,
+`7363c25`, whose migration file had gone uncommitted — see below).
+
+### What exists
+
+Two tables (`notification_deliveries`, `notification_delivery_failures`),
+three functions (`pending_escalations`, `run_escalation_sweep`,
+`purge_notification_records`), `pg_net` installed, two cron jobs, four
+application files, and one exemption in `middleware.ts`. Neither table has
+any column capable of holding message content: the rule that an escalation
+email may say who/which section/when/why/sign-in-link and never what the
+student wrote is enforced by there being no field to put it in, not by
+callers remembering not to. `EscalationNotice` in `lib/email.ts` has no
+`body`/`text`/`html`/`subject` field and no index signature; verified by
+compiling a probe that tried six ways in, all six rejected by `tsc`.
+
+The no-fallback-recipient rule (a section with no accepted escalation
+recipient is recorded and never sent, no exceptions) is an INNER JOIN inside
+`pending_escalations` to accepted `section_staff` rows. No application code
+path can introduce a fallback address without editing that function.
+
+Scheduling runs in Postgres (`pg_cron` + `pg_net`) rather than Vercel Cron,
+because the account is on the Hobby plan (confirmed via the Vercel API,
+`billing plan: hobby`), which allows one cron run per day — incompatible
+with a six-hour deduplication window. The sweep endpoint is exempted from
+the site-password gate in middleware and instead requires
+`NOTIFY_SWEEP_SECRET` as a bearer, compared in constant time, with an unset
+secret meaning the endpoint is CLOSED (404), the inverse of `SITE_PASSWORD`'s
+deliberate fail-open.
+
+### Two runtime-only bugs found by actually calling the code, not by reading it
+
+Both passed `tsc` cleanly. Both are the same category of failure this
+project has now hit three times tonight (`node:crypto` in this same
+middleware change was the first): a thing that type-checks and is wrong only
+when actually executed.
+
+**1. `node:crypto`'s `timingSafeEqual` in middleware.** Middleware runs in
+the Edge Runtime, where `node:crypto` does not exist. The import failed at
+module evaluation, which took down EVERY route in the app with a 500, pages
+included, not just the sweep endpoint. Found by restarting the dev server
+for an unrelated reason and discovering the whole site was down. Fixed with
+a Web Crypto comparison: SHA-256 both values, XOR-compare the fixed 32-byte
+digests. Strictly better than the original too, since a 32-byte comparison
+can't leak the secret's length the way a max-length loop over raw inputs
+would.
+
+**2. `new Resend(process.env.RESEND_API_KEY)` at module scope in
+`lib/email.ts`.** The Resend SDK throws in its constructor when the key is
+missing. With `RESEND_API_KEY` unset, the exact state this system is in
+right now, that crashed every import of the module, taking `/api/internal/
+notify` down with a 500 on every call. Worse than an ordinary bug: it meant
+`lib/notifications.ts`'s own `configured` check, built specifically to
+degrade gracefully and record a `not_configured` failure instead of
+crashing, never got the chance to run, because the crash happened one import
+earlier. Fixed with lazy construction: the client is built on first use,
+inside the function that sends, so importing the module is always safe.
+
+### The four verifications, run twice, exact output both times
+
+First pass established the fixes; a second pass on Josh's request re-ran
+each from a clean, unambiguous state (server restarted specifically to make
+the secret genuinely absent, not just an unsent header against a server that
+still had it loaded) and is the result recorded here.
+
+- **Unauthenticated, secret unset:** `HTTP/1.1 404 Not Found`, body
+  `Not found.` Confirmed after a real restart with the var removed from
+  `.env.local`.
+- **Wrong bearer, secret configured:** `HTTP/1.1 401 Unauthorized`, body
+  `Unauthorized.` Also held for a same-length wrong guess and for a
+  60-of-64-character prefix of the real secret, ruling out a short-circuit
+  comparison.
+- **`pending_escalations` through the real route:** two real
+  `distress_events` inserted directly, then the actual route hit with curl
+  returned `{"pending":1,"sent":0,"failed":0,"skipped":true}`.
+  `pending_escalations()` itself resolved `event_count: 2`, `student_email`
+  from `auth.users`, and `recipient_email` from the accepted escalation
+  recipient — all through the deployed function, not a hand-written query.
+- **`not_configured` with its six-hour rate limit:** 5 consecutive sweep
+  calls against one pending escalation produced exactly ONE row in
+  `notification_delivery_failures`. `notification_deliveries` stayed at 0
+  throughout, confirming nothing was ever falsely recorded as sent.
+
+All test rows deleted after both passes; `distress_events`,
+`notification_deliveries`, and `notification_delivery_failures` confirmed
+back to zero each time.
+
+### A repo/database drift caught in passing
+
+The migration `20260907212000_create_notification_delivery.sql` had been
+applied to the shared database in the session that designed it, but never
+committed: that commit's `git add` listed explicit paths and missed
+`supabase/`. The repo and the deployed schema were silently out of sync
+until this pass caught it via `git status` showing the file as untracked.
+Committed now, unchanged from what was applied. Worth remembering for any
+future migration: `git status` after staging, not just `git add -A` on the
+directories you think you touched.
+
+### Still outstanding: an actual delivered email
+
+Nothing above proves mail leaves this system. That needs Josh's own Resend
+account, a verified sender domain (SPF/DKIM records only he can add), and:
+
+- `.env.local` and Vercel: `RESEND_API_KEY`, `NOTIFY_FROM_ADDRESS`,
+  `NOTIFY_SIGN_IN_URL`, `NOTIFY_SWEEP_SECRET`
+- Supabase Vault: `notify_sweep_url` (the deployed `/api/internal/notify`
+  URL), `notify_sweep_secret` (must equal `NOTIFY_SWEEP_SECRET`)
+
+**The sign-in link this email points to will not work** until standing item
+1 (production Google sign-in) is fixed. Accepted and recorded, not a
+surprise to raise again: Josh stood down on that fix for tonight and this
+work proceeded anyway on that basis.
+
+Until these are set, `run_escalation_sweep()` on the shared database returns
+silently (Vault secrets absent) and `/api/internal/notify` reports
+`not_configured` if ever called with a valid bearer (env vars absent) — both
+by design, not by omission.
