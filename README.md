@@ -1,56 +1,111 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+A course-scoped AI teaching assistant for TCI. Students sign in with Google,
+join a course section with a code, and ask questions that are answered
+strictly from that course's own material, with built-in detection of and a
+fixed, sourced response to student distress. Built on Next.js and Supabase.
 
-## Getting Started
+**For current build status — what's deployed, what's verified, what's
+outstanding, what's next — see the HANDOFF NOTE at the top of
+[`SESSION_NOTES.md`](./SESSION_NOTES.md).** That file is the single source
+of truth for project state and is updated every time something ships or
+changes. This README does not duplicate it and will not track it; treat any
+status claim here that contradicts `SESSION_NOTES.md` as this file being
+stale, not the other way around.
 
-First, run the development server:
+## Stack
+
+- **Next.js 16** (App Router, Turbopack) with React 19, deployed to Vercel
+- **Supabase**: Postgres (with `pgvector`, `pg_cron`, `pg_net`, Vault) for
+  data, auth (Google OAuth), and row-level security
+- **Anthropic API** (`claude-sonnet-5`) for tutoring responses and distress
+  classification
+- **Voyage AI** (`voyage-3-large`) for embeddings, queried through a
+  rate-limited queue backed by Upstash Redis
+- **Resend** for escalation email to a section's designated staff
+
+## Architecture
+
+**Courses and sections.** A course (e.g. `MKTG365`) holds shared knowledge
+material. A section is one offering of it: its own dates, join code, access
+mode, crisis resource, and staff. `can_access_section` is a database
+function and the single source of truth for whether a given signed-in (or,
+where the section allows it, anonymous) caller may use it — entitlement is
+decided in SQL, not in application code.
+
+**Retrieval-augmented tutoring** (`app/api/chat`). A student's message is
+embedded, matched against `knowledge_chunks` via `pgvector`, and answered by
+Claude using only the retrieved material — the system prompt requires it to
+say plainly when the material doesn't cover something rather than filling
+the gap from general knowledge.
+
+**Distress detection** (`lib/distress.ts`, `lib/distress-response.ts`). Every
+message is classified on a five-level scale, independently of an
+interpersonal-harm signal. The two highest levels get fixed, sourced
+response text (not model-generated) and can override the normal entitlement
+check entirely, so a distress disclosure gets a safe response even from an
+unentitled or signed-out caller. A first crisis and a repeat crisis in the
+same conversation get deliberately different text; which one fires is
+decided against `distress_events` in the database, not by pattern-matching
+conversation text, so it survives conversation history being restored from
+storage.
+
+**Chat history** (`conversations` / `messages`). Verbatim, multi-thread,
+scoped through `can_access_section`. Any turn classified as
+personal-distress-or-above, on either side of the exchange, is never written
+to `messages` at all — only a uniform marker is, enforced by a CHECK
+constraint that makes it structurally impossible for a marker row to also
+carry content. The actual content lives solely in `distress_events`, under
+its own retention clock, readable only by the section's accepted wellbeing
+reader.
+
+**Escalation notification** (`lib/notifications.ts`,
+`app/api/internal/notify`). A scheduled sweep, run from Postgres via
+`pg_cron`/`pg_net` rather than Vercel Cron, notifies a section's accepted
+escalation recipient when a student crosses a notification threshold. The
+email can contain identity and context — who, which section, when, why —
+and is structurally incapable of containing the student's message text: the
+type describing what an email may say has no field for it. A section with no
+accepted recipient is recorded and never sent to, with no fallback address,
+enforced by the database query itself rather than by application logic that
+could be bypassed.
+
+**Retention.** Distress event text, conversation history, and notification
+records each purge on their own schedule via `pg_cron`, independently of one
+another — deliberately, so that redacting content from one place (say,
+`messages`) never depends on remembering to also redact it from another.
+
+## Running locally
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Requires a `.env.local` with, at minimum: `ANTHROPIC_API_KEY`,
+`VOYAGE_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
+`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and the Upstash
+`KV_REST_API_*` / `REDIS_URL` variables used for rate limiting. The
+escalation-email path additionally reads `RESEND_API_KEY`,
+`NOTIFY_FROM_ADDRESS`, `NOTIFY_SIGN_IN_URL`, and `NOTIFY_SWEEP_SECRET` — see
+`SESSION_NOTES.md` for whether those are currently configured and why.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+The whole site can sit behind an HTTP Basic gate controlled by
+`SITE_PASSWORD`; unset, or run with `SITE_PASSWORD=` prefixed, to disable it
+locally. Database migrations live in `supabase/migrations/` and are applied
+directly against the one Supabase project shared by local and production —
+there is no separate staging database.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Standing project rules
 
-## Learn More
+- Any change to an API route's request or response contract gets a UI-level
+  test, not just `curl` — a past incident here shipped a change that passed
+  every automated check while quietly breaking the live chat UI for days.
+- Safety guarantees (access control, redaction, retention) live in the
+  database as RLS policies, CHECK constraints, triggers, and `SECURITY
+  DEFINER` functions — verified by reading the deployed object back, not
+  assumed from a migration file.
+- Deployment is a manual `vercel --prod`; nothing auto-deploys.
+- Secrets are never printed to a transcript or a terminal; inspect
+  `.env.local` by variable name only.
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Environment variables
-
-Core function (chat, retrieval, auth, distress handling) needs
-`ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `SUPABASE_URL` /
-`SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_URL` /
-`NEXT_PUBLIC_SUPABASE_ANON_KEY`, and the Upstash `KV_REST_API_*` /
-`REDIS_URL` variables used for rate limiting.
-
-**Escalation email is built and verified end to end, but not yet live.**
-Setting up its remaining four variables — `RESEND_API_KEY`,
-`NOTIFY_FROM_ADDRESS`, `NOTIFY_SIGN_IN_URL`, `NOTIFY_SWEEP_SECRET` — plus the
-two Supabase Vault secrets it also needs (`notify_sweep_url`,
-`notify_sweep_secret`) is a **deliberately deferred decision**, not an
-oversight: see `SESSION_NOTES.md` for the full accounting, the "DECISION:
-Resend account and Vault secrets deliberately deferred" entry for why this
-is safe to leave as-is, and the "CLOSED (pending live send)" entry above it
-for what has already been verified without them. Until they're set, the
-escalation sweep runs on schedule and does nothing, by design, with no data
-loss in the interim.
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+See `SESSION_NOTES.md` for the full reasoning behind each of these and the
+complete running history of the project.
