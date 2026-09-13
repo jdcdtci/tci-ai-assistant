@@ -3852,3 +3852,33 @@ Until these are set, `run_escalation_sweep()` on the shared database returns
 silently (Vault secrets absent) and `/api/internal/notify` reports
 `not_configured` if ever called with a valid bearer (env vars absent) — both
 by design, not by omission.
+
+## DECISION: Resend account and Vault secrets deliberately deferred (2026-09-13)
+
+Recorded so a future session does not mistake the sweep's current silence
+for a bug and go looking for what broke it.
+
+**Nothing is broken.** Josh reviewed the four verifications above and
+explicitly chose to hold off on setting up the Resend account, sender
+domain, and the two Supabase Vault secrets (`notify_sweep_url`,
+`notify_sweep_secret`) until later, doing them together rather than
+piecemeal. This is a scheduling choice, not a blocker discovered mid-build.
+
+**Concretely, right now, on the shared database:** `run-escalation-sweep`
+fires via `pg_cron` every ten minutes as designed. Each run calls
+`run_escalation_sweep()`, which looks up both Vault secrets, finds neither,
+and returns immediately without making any network call. This is the
+documented fail-silent behavior in the migration's own comment, chosen
+specifically so an unconfigured sweep does not spam the cron log every ten
+minutes. **If `distress_events` accumulates `notification_worthy = true`
+rows while this is deferred, they are NOT lost.** `pending_escalations`
+counts everything since the last actual send, with no age cap, by design
+(confirmed earlier tonight) — so the first real sweep after setup notifies
+on the full backlog rather than starting silently caught up.
+
+**Nothing else is waiting on this.** Chat history and the notification
+schema are both independently complete and committed; this defers only the
+live-send verification of the email work, not any other part of the build.
+
+See `README.md` for the environment variables this setup will eventually
+need.

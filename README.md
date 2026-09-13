@@ -29,6 +29,26 @@ To learn more about Next.js, take a look at the following resources:
 
 You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
 
+## Environment variables
+
+Core function (chat, retrieval, auth, distress handling) needs
+`ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `SUPABASE_URL` /
+`SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_URL` /
+`NEXT_PUBLIC_SUPABASE_ANON_KEY`, and the Upstash `KV_REST_API_*` /
+`REDIS_URL` variables used for rate limiting.
+
+**Escalation email is built and verified end to end, but not yet live.**
+Setting up its remaining four variables — `RESEND_API_KEY`,
+`NOTIFY_FROM_ADDRESS`, `NOTIFY_SIGN_IN_URL`, `NOTIFY_SWEEP_SECRET` — plus the
+two Supabase Vault secrets it also needs (`notify_sweep_url`,
+`notify_sweep_secret`) is a **deliberately deferred decision**, not an
+oversight: see `SESSION_NOTES.md` for the full accounting, the "DECISION:
+Resend account and Vault secrets deliberately deferred" entry for why this
+is safe to leave as-is, and the "CLOSED (pending live send)" entry above it
+for what has already been verified without them. Until they're set, the
+escalation sweep runs on schedule and does nothing, by design, with no data
+loss in the interim.
+
 ## Deploy on Vercel
 
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
